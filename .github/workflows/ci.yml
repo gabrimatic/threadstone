@@ -21,7 +21,7 @@ jobs:
         run: python3 -m venv ~/mlx-env
 
       - name: Run tests
-        run: python3 -m unittest test_threadstone -v
+        run: python3 -m unittest discover -s tests -t . -v
 
   setup-check:
     name: Setup script syntax

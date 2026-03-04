@@ -1,0 +1,24 @@
+[project]
+name = "threadstone"
+version = "1.0.0"
+description = "Offline terminal chat for local LLMs on Apple Silicon"
+readme = "README.md"
+license = "MIT"
+requires-python = ">=3.13"
+authors = [
+    { name = "Soroush Yousefpour" },
+]
+keywords = ["llm", "mlx", "apple-silicon", "offline", "chat", "terminal"]
+classifiers = [
+    "Development Status :: 5 - Production/Stable",
+    "Environment :: Console",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: MacOS",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+]
+
+[project.urls]
+Repository = "https://github.com/gabrimatic/threadstone"
+Issues = "https://github.com/gabrimatic/threadstone/issues"

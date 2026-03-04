@@ -50,11 +50,11 @@ _shell_rc() {
       ;;
   esac
 }
-ZSHRC="$(_shell_rc)"
+RC_FILE="$(_shell_rc)"
 
 # Now check idempotency for the rc file too
-if $_already_installed && grep -q "# ── oracle" "${ZSHRC}" 2>/dev/null; then
-  warn "setup has already been run (venv exists, oracle block found in ${ZSHRC})"
+if $_already_installed && grep -q "# ── oracle" "${RC_FILE}" 2>/dev/null; then
+  warn "setup has already been run (venv exists, oracle block found in ${RC_FILE})"
   warn "continuing anyway; existing config will be updated"
 fi
 
@@ -158,12 +158,12 @@ for MODEL in "${MODELS_LIST[@]}"; do
   fi
 done
 
-# ── 8. zshrc aliases ──────────────────────────────────────────────────────────
+# ── 8. shell aliases ──────────────────────────────────────────────────────────
 info "writing shell aliases..."
 
 # Remove old oracle block. Line-anchored pattern avoids over-eating.
 # Falls back to truncation if the closing marker is malformed.
-python3 - "${ZSHRC}" <<'PYEOF'
+python3 - "${RC_FILE}" <<'PYEOF'
 import sys, re
 from pathlib import Path
 
@@ -192,11 +192,11 @@ rc.write_text(cleaned, encoding="utf-8")
 PYEOF
 
 # Only append if the oracle block is truly gone (avoids duplication).
-if grep -q "# ── oracle" "${ZSHRC}" 2>/dev/null; then
-  warn "oracle block already exists in ${ZSHRC} after cleanup attempt; skipping append to avoid duplication"
-  warn "manually remove the oracle block from ${ZSHRC} and re-run if you want to update it"
+if grep -q "# ── oracle" "${RC_FILE}" 2>/dev/null; then
+  warn "oracle block already exists in ${RC_FILE} after cleanup attempt; skipping append to avoid duplication"
+  warn "manually remove the oracle block from ${RC_FILE} and re-run if you want to update it"
 else
-  cat >> "${ZSHRC}" <<ZSHBLOCK
+  cat >> "${RC_FILE}" <<ZSHBLOCK
 
 # ── oracle ───────────────────────────────────────────────────────────────────
 _forge_port() {
@@ -280,7 +280,7 @@ oracle() {
 # ─────────────────────────────────────────────────────────────────────────────
 ZSHBLOCK
 
-  ok "shell rc updated: ${ZSHRC}"
+  ok "shell rc updated: ${RC_FILE}"
 fi
 
 # ── 9. verify offline ─────────────────────────────────────────────────────────

@@ -127,14 +127,14 @@ quench [size|all]        # stop server(s)
 
 ## Architecture
 
-Two files, clear separation:
+Two core files, clear separation:
 
 | File | Role |
 |------|------|
 | `config.py` | All tunables: model paths, ports, inference params, context limits, offline env vars |
 | `threadstone.py` | The engine: server management, streaming, REPL, history. Stdlib only |
 | `setup.sh` | One-time installer: venv, models, shell aliases |
-| `test_threadstone.py` | Unit tests |
+| `tests/` | Unit tests |
 
 ---
 
