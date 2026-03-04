@@ -7,6 +7,7 @@ import atexit
 import errno
 import json
 import os
+import re
 import socket
 import subprocess
 import sys
@@ -30,8 +31,8 @@ THINK = "\033[2;3m"
 
 THINK_CLOSE = "</think>"
 THINK_OPEN = "<think>"
-HISTORY_TTL = 24 * 3600
 DIR_LIMIT = 200
+_MIN_PRINTABLE_RATIO = 0.70
 NETWORK_ERRORS = (
     urllib.error.URLError,
     ConnectionError,
@@ -62,6 +63,7 @@ class ModelConfig:
     ctx_warn: int
     ctx_trim: int
     ctx_keep: int
+    ram_gb: float
 
 
 @dataclass(frozen=True)
@@ -87,6 +89,43 @@ class StreamInterrupted(KeyboardInterrupt):
         self.result = result
 
 
+def _vm_stat_available_gb() -> float | None:
+    """Return approximate free + reclaimable RAM in GB via vm_stat."""
+    try:
+        out = subprocess.check_output(["vm_stat"], text=True, timeout=3)
+    except Exception:
+        return None
+    m = re.search(r"page size of (\d+) bytes", out)
+    if not m:
+        return None
+    page_size = int(m.group(1))
+    pages = 0
+    for label in ("Pages free", "Pages inactive", "Pages speculative"):
+        m = re.search(rf"{label}:\s+(\d+)\.", out)
+        if m:
+            pages += int(m.group(1))
+    if pages == 0:
+        return None
+    return pages * page_size / (1024 ** 3)
+
+
+def _running_model_ram_gb(exclude_port: int) -> float:
+    """Sum the approximate RAM of model servers that are currently reachable."""
+    total = 0.0
+    for model_data in MODELS.values():
+        port = int(model_data["port"])
+        if port == exclude_port:
+            continue
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+            s.settimeout(0.2)
+            try:
+                if s.connect_ex(("127.0.0.1", port)) == 0:
+                    total += float(model_data["ram_gb"])
+            except OSError:
+                pass
+    return total
+
+
 class ServerManager:
     def __init__(self, cli: CliConfig) -> None:
         self.cli = cli
@@ -98,8 +137,28 @@ class ServerManager:
         self.printed_waiting = False
 
     def start(self) -> bool:
+        available_gb = _vm_stat_available_gb()
+        if available_gb is not None:
+            model_ram_gb = self.cli.model.ram_gb
+            running_gb = _running_model_ram_gb(self.cli.model.port)
+            if running_gb > 0:
+                print(f"{DIM}other model servers: ~{running_gb:.1f} GB in use{RST}")
+            # Threshold is 1.5× model size: ram_gb already includes MLX overhead,
+            # so 1.5× leaves headroom for the OS and any other active processes.
+            if available_gb < model_ram_gb * 1.5:
+                print(
+                    f"{RED}insufficient RAM: ~{available_gb:.1f} GB available, "
+                    f"~{model_ram_gb:.1f} GB needed for {self.cli.model.size}{RST}"
+                )
+                return False
+
         preferred = self.cli.port_override or self.cli.model.port
-        candidate = self._find_available_port(preferred)
+        try:
+            candidate = self._find_available_port(preferred)
+        except RuntimeError as exc:
+            print(f"{RED}{exc}{RST}")
+            return False
+
         for _ in range(10):
             self.port = candidate
             self.server = f"http://127.0.0.1:{candidate}"
@@ -111,7 +170,11 @@ class ServerManager:
             if self._log_contains("Address already in use"):
                 self.stop()
                 preferred = candidate + 1
-                candidate = self._find_available_port(preferred)
+                try:
+                    candidate = self._find_available_port(preferred)
+                except RuntimeError as exc:
+                    print(f"{RED}{exc}{RST}")
+                    return False
                 continue
             return False
         return False
@@ -216,15 +279,16 @@ class ServerManager:
     def _find_available_port(preferred: int) -> int:
         candidate = preferred
         while True:
+            if candidate > 65535:
+                raise RuntimeError("no available port found in valid range")
             if ServerManager._port_available(candidate):
                 return candidate
-            if candidate == preferred:
-                candidate = preferred + 10
-            else:
-                candidate += 1
+            candidate = (preferred + 10) if candidate == preferred else (candidate + 1)
 
     @staticmethod
     def _port_available(port: int) -> bool:
+        if not (1 <= port <= 65535):
+            return False
         with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
             sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
             try:
@@ -247,6 +311,7 @@ def model_config(size: str) -> ModelConfig:
         ctx_warn=data["ctx_warn"],
         ctx_trim=data["ctx_trim"],
         ctx_keep=data["ctx_keep"],
+        ram_gb=float(data["ram_gb"]),
     )
 
 
@@ -279,6 +344,9 @@ def parse_args(argv: list[str], env: dict[str, str] | None = None) -> CliConfig:
         except ValueError:
             print(f"{RED}FORGE_PORT={raw_port!r} is not a valid integer{RST}")
             raise SystemExit(1)
+        if not (1 <= port_override <= 65535):
+            print(f"{RED}FORGE_PORT={raw_port!r} must be 1-65535{RST}")
+            raise SystemExit(1)
 
     return CliConfig(
         sys_prompt=sys_prompt,
@@ -286,47 +354,6 @@ def parse_args(argv: list[str], env: dict[str, str] | None = None) -> CliConfig:
         port_override=port_override,
         extra_args=extra_args,
     )
-
-
-def history_path(size: str) -> Path:
-    hist_dir = Path("~/.cache/threadstone").expanduser()
-    hist_dir.mkdir(parents=True, exist_ok=True)
-    tty_name = "notty"
-    try:
-        tty_name = os.path.basename(os.ttyname(sys.stdin.fileno()))
-    except OSError:
-        pass
-    safe_tty = "".join(ch if ch.isalnum() else "_" for ch in tty_name)
-    return hist_dir / f"history-{size}-{safe_tty}.json"
-
-
-def save_history(path: Path, history: list[dict[str, str]]) -> None:
-    try:
-        path.write_text(
-            json.dumps({"saved_at": time.time(), "messages": history}),
-            encoding="utf-8",
-        )
-    except OSError:
-        pass
-
-
-def load_history(path: Path) -> tuple[list[dict[str, str]] | None, float | None]:
-    try:
-        data = json.loads(path.read_text(encoding="utf-8"))
-        age = time.time() - float(data["saved_at"])
-        messages = data["messages"]
-        if not isinstance(messages, list):
-            return None, None
-        return messages, age
-    except (OSError, ValueError, KeyError, TypeError):
-        return None, None
-
-
-def delete_history(path: Path) -> None:
-    try:
-        path.unlink(missing_ok=True)
-    except OSError:
-        pass
 
 
 def _is_cjk(ch: str) -> bool:
@@ -346,11 +373,15 @@ def token_est(history: list[dict[str, str]]) -> int:
 
 
 def trim_history(history: list[dict[str, str]], keep: int) -> list[dict[str, str]]:
-    system = [message for message in history if message["role"] == "system"]
-    turns = [message for message in history if message["role"] != "system"]
+    system = [m for m in history if m["role"] == "system"]
+    turns = [m for m in history if m["role"] != "system"]
     kept = turns[-keep:]
-    if len(turns) > len(kept):
-        print(f"{YEL}trimmed {len(turns) - len(kept)} old messages{RST}")
+    # Ensure the kept slice starts with a user turn to preserve role alternation.
+    while kept and kept[0]["role"] != "user":
+        kept = kept[1:]
+    trimmed = len(turns) - len(kept)
+    if trimmed > 0:
+        print(f"{YEL}trimmed {trimmed} old messages{RST}")
     return system + kept
 
 
@@ -369,6 +400,9 @@ def build_messages(sys_prompt: str, history: list[dict[str, str]]) -> list[dict[
     if sys_prompt:
         messages.append({"role": "system", "content": sys_prompt})
     for message in history:
+        # Skip system messages in history; the sys_prompt above is authoritative.
+        if message["role"] == "system":
+            continue
         if message["role"] == "assistant":
             messages.append(sanitize_assistant_for_api(message))
         else:
@@ -376,9 +410,24 @@ def build_messages(sys_prompt: str, history: list[dict[str, str]]) -> list[dict[
     return messages
 
 
+def _is_printable_text(text: str, sample: int = 4096) -> bool:
+    """Return True if at least _MIN_PRINTABLE_RATIO of the sample is printable."""
+    chunk = text[:sample]
+    if not chunk:
+        return False
+    printable = sum(1 for ch in chunk if ch.isprintable() or ch in "\n\r\t")
+    return printable / len(chunk) >= _MIN_PRINTABLE_RATIO
+
+
 def decode_attachment_bytes(raw: bytes, path: Path) -> str:
+    # Explicit BOM — trust it, but verify the result is actual text.
     if raw[:2] in (b"\xff\xfe", b"\xfe\xff"):
-        return raw.decode("utf-16", errors="replace")
+        decoded = raw.decode("utf-16", errors="replace")
+        if not _is_printable_text(decoded):
+            raise ValueError(f"binary file: {path.name}")
+        return decoded
+
+    # Null bytes in the header suggest UTF-16 or raw binary.
     if b"\x00" in raw[:8192]:
         candidates = []
         for encoding in ("utf-16", "utf-16-le", "utf-16-be"):
@@ -390,10 +439,11 @@ def decode_attachment_bytes(raw: bytes, path: Path) -> str:
             candidates.append((score, decoded))
         if candidates:
             candidates.sort(key=lambda item: item[0])
-            decoded = candidates[0][1]
-            if decoded.replace("\x00", "").strip():
-                return decoded.replace("\x00", "")
+            decoded = candidates[0][1].replace("\x00", "")
+            if decoded.strip() and _is_printable_text(decoded):
+                return decoded
         raise ValueError(f"binary file: {path.name}")
+
     try:
         return raw.decode("utf-8")
     except UnicodeDecodeError:
@@ -445,7 +495,6 @@ def print_help() -> None:
     print("/drop         clear the pending attachment")
     print("/clear        clear history and pending attachment")
     print("/history      show conversation history")
-    print("/restore      reload the recent session for this tab")
     print("/help         show this message")
     print(f"exit / quit   end session{RST}")
 
@@ -584,15 +633,8 @@ def run_chat(cli: CliConfig) -> int:
         return 1
     atexit.register(server.stop)
 
-    history_file = history_path(cli.model.size)
     history: list[dict[str, str]] = []
     attachment: tuple[str, str] | None = None
-
-    saved_messages, saved_age = load_history(history_file)
-    if saved_messages is not None and saved_age is not None and saved_age < HISTORY_TTL:
-        count = len([message for message in saved_messages if message.get("role") != "system"])
-        noun = "message" if count == 1 else "messages"
-        print(f"{DIM}previous session found ({count} {noun}). /restore to reload, or start fresh{RST}")
 
     clear_wait = f"\r{' ' * 50}\r" if server.printed_waiting else ""
     print(f"{clear_wait}{BOLD}threadstone {cli.model.size}{RST}  {DIM}{prompt_display(cli.sys_prompt)}{RST}\n")
@@ -622,69 +664,56 @@ def run_chat(cli: CliConfig) -> int:
         if user.lower() in {"exit", "quit"}:
             break
 
-        if user.lower() == "/clear":
-            history = []
-            attachment = None
-            delete_history(history_file)
-            print(f"{DIM}cleared{RST}")
-            continue
-
-        if user.lower() == "/history":
-            shown = False
-            for message in history:
-                if message["role"] == "system":
-                    continue
-                if message["role"] == "user":
-                    preview = display_user(message["content"])[:120].replace("\n", " ")
-                    print(f"  you  {preview}")
-                else:
-                    preview = display_assistant(message["content"])[:120].replace("\n", " ")
-                    print(f"   *   {preview}")
-                shown = True
-            if not shown:
-                print(f"{DIM}(empty){RST}")
-            continue
-
-        if user.lower() == "/help":
-            print_help()
-            continue
-
-        if user.lower() in {"/drop", "/unread"}:
-            if attachment:
-                print(f"{DIM}dropped: {attachment[0]}{RST}")
-                attachment = None
-            else:
-                print(f"{DIM}no attachment pending{RST}")
-            continue
-
-        if user.lower() == "/restore":
-            saved_messages, saved_age = load_history(history_file)
-            if saved_messages is None:
-                print(f"{DIM}no saved session found{RST}")
-            elif saved_age is not None and saved_age >= HISTORY_TTL:
-                print(f"{YEL}saved session is older than 24 hours and was not restored{RST}")
-            else:
-                history = saved_messages
-                count = len([message for message in history if message.get("role") != "system"])
-                noun = "message" if count == 1 else "messages"
-                print(f"{DIM}restored {count} {noun}{RST}")
-            continue
-
-        if user.lower() == "/read" or user.lower().startswith("/read "):
-            try:
-                label, body, truncated = read_path(user[5:], MAX_FILE_BYTES)
-                if attachment is not None:
-                    print(f"{YEL}replaced previous attachment{RST}")
-                attachment = (label, body)
-                if truncated:
-                    print(f"{YEL}truncated attachment at {MAX_FILE_BYTES // 1024} KB{RST}")
-                print(f"{DIM}attached: {label}{RST}")
-            except ValueError as exc:
-                print(f"{RED}error: {exc}{RST}")
-            continue
-
         if user.startswith("/"):
-            print(f"{RED}unknown command: {user.split()[0]}{RST}")
+            parts = user.split(None, 1)
+            cmd = parts[0].lower()
+            arg = parts[1] if len(parts) > 1 else ""
+
+            if cmd == "/clear":
+                history = []
+                attachment = None
+                print(f"{DIM}cleared{RST}")
+
+            elif cmd == "/history":
+                shown = False
+                for message in history:
+                    if message["role"] == "system":
+                        continue
+                    if message["role"] == "user":
+                        preview = display_user(message["content"])[:120].replace("\n", " ")
+                        print(f"  you  {preview}")
+                    else:
+                        preview = display_assistant(message["content"])[:120].replace("\n", " ")
+                        print(f"   *   {preview}")
+                    shown = True
+                if not shown:
+                    print(f"{DIM}(empty){RST}")
+
+            elif cmd == "/help":
+                print_help()
+
+            elif cmd in {"/drop", "/unread"}:
+                if attachment:
+                    print(f"{DIM}dropped: {attachment[0]}{RST}")
+                    attachment = None
+                else:
+                    print(f"{DIM}no attachment pending{RST}")
+
+            elif cmd == "/read":
+                try:
+                    label, body, truncated = read_path(arg, MAX_FILE_BYTES)
+                    if attachment is not None:
+                        print(f"{YEL}replaced previous attachment{RST}")
+                    attachment = (label, body)
+                    if truncated:
+                        print(f"{YEL}truncated attachment at {MAX_FILE_BYTES // 1024} KB{RST}")
+                    print(f"{DIM}attached: {label}{RST}")
+                except ValueError as exc:
+                    print(f"{RED}error: {exc}{RST}")
+
+            else:
+                print(f"{RED}unknown command: {cmd}{RST}")
+
             continue
 
         content = attach_to_user_prompt(user, attachment)
@@ -702,7 +731,6 @@ def run_chat(cli: CliConfig) -> int:
                 append_assistant_message(history, result)
             else:
                 history.append({"role": "assistant", "content": "(no answer produced)", "api_content": ""})
-            save_history(history_file, history)
             print()
         except urllib.error.HTTPError as exc:
             history.pop()
@@ -720,11 +748,9 @@ def run_chat(cli: CliConfig) -> int:
                     finally:
                         response.close()
                     append_assistant_message(history, result)
-                    save_history(history_file, history)
                     print()
                 except StreamInterrupted as exc:
                     append_assistant_message(history, exc.result)
-                    save_history(history_file, history)
                     print(f"{DIM}interrupted{RST}")
                 except urllib.error.HTTPError as retry_exc:
                     history.pop()
@@ -736,7 +762,6 @@ def run_chat(cli: CliConfig) -> int:
                 print(f"{RED}server restart failed: {exc}{RST}")
         except StreamInterrupted as exc:
             append_assistant_message(history, exc.result)
-            save_history(history_file, history)
             print(f"{DIM}interrupted{RST}")
 
     return 0

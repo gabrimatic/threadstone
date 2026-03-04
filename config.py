@@ -57,6 +57,8 @@ def _snapshot(repo: str, fallback_hash: str) -> Path:
 
 # ── models: per-size runtime config ───────────────────────────────────────────
 # Add a new model here and one entry in _forge_port() in setup.sh.
+# ram_gb: approximate peak unified memory usage (model weights + MLX overhead).
+# Used for the pre-launch memory guard.
 MODELS: dict[str, dict[str, object]] = {
     "9B": {
         "path": _snapshot("models--mlx-community--Qwen3.5-9B-MLX-4bit", "d0b3cb793b1b12acf826571ae1bb2bc819a7a37f"),
@@ -66,6 +68,7 @@ MODELS: dict[str, dict[str, object]] = {
         "ctx_warn": 6000,
         "ctx_trim": 8000,
         "ctx_keep": 12,
+        "ram_gb": 7.5,
     },
     "4B": {
         "path": _snapshot("models--mlx-community--Qwen3.5-4B-MLX-4bit", "32f3e8ecf65426fc3306969496342d504bfa13f3"),
@@ -75,6 +78,7 @@ MODELS: dict[str, dict[str, object]] = {
         "ctx_warn": 6000,
         "ctx_trim": 8000,
         "ctx_keep": 12,
+        "ram_gb": 3.5,
     },
     "2B": {
         "path": _snapshot("models--mlx-community--Qwen3.5-2B-MLX-4bit", "93760be4f1f69842a46bc13dbdc0f19e291392a3"),
@@ -84,6 +88,7 @@ MODELS: dict[str, dict[str, object]] = {
         "ctx_warn": 3000,
         "ctx_trim": 4000,
         "ctx_keep": 8,
+        "ram_gb": 2.0,
     },
     "0.8B": {
         "path": _snapshot("models--mlx-community--Qwen3.5-0.8B-MLX-4bit", "5d894f8cc4ef3e6c88537bf3746ed262f549da6a"),
@@ -93,6 +98,7 @@ MODELS: dict[str, dict[str, object]] = {
         "ctx_warn": 1500,
         "ctx_trim": 2000,
         "ctx_keep": 4,
+        "ram_gb": 1.5,
     },
 }
 
@@ -122,7 +128,7 @@ def validate():
     if MAX_FILE_BYTES <= 0:
         errors.append(f"MAX_FILE_BYTES must be positive, got {MAX_FILE_BYTES}")
 
-    required = {
+    required: dict[str, type | tuple[type, ...]] = {
         "path": Path,
         "port": int,
         "thinking": bool,
@@ -130,6 +136,7 @@ def validate():
         "ctx_warn": int,
         "ctx_trim": int,
         "ctx_keep": int,
+        "ram_gb": (int, float),
     }
 
     for key, model in MODELS.items():
@@ -138,7 +145,7 @@ def validate():
                 errors.append(f"MODELS[{key!r}] is missing {field!r}")
                 continue
             if not isinstance(model[field], field_type):
-                errors.append(f"MODELS[{key!r}][{field!r}] must be {field_type.__name__}")
+                errors.append(f"MODELS[{key!r}][{field!r}] must be {field_type.__name__ if isinstance(field_type, type) else ' or '.join(t.__name__ for t in field_type)}")
         if isinstance(model.get("max_tokens"), int) and model["max_tokens"] <= 0:
             errors.append(f"MODELS[{key!r}]['max_tokens'] must be positive")
         if isinstance(model.get("ctx_keep"), int) and model["ctx_keep"] <= 0:
@@ -148,6 +155,8 @@ def validate():
         if isinstance(model.get("ctx_trim"), int) and isinstance(model.get("ctx_warn"), int):
             if model["ctx_trim"] <= model["ctx_warn"]:
                 errors.append(f"MODELS[{key!r}]['ctx_trim'] must be greater than 'ctx_warn'")
+        if isinstance(model.get("ram_gb"), (int, float)) and model["ram_gb"] <= 0:
+            errors.append(f"MODELS[{key!r}]['ram_gb'] must be positive")
 
     if errors:
         raise ValueError("config errors:\n" + "\n".join(f"  · {e}" for e in errors))

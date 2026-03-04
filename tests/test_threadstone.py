@@ -47,6 +47,20 @@ class TestParseArgs(unittest.TestCase):
                 ts.parse_args(["threadstone.py"], env={"FORGE_PORT": "abc"})
         self.assertIn("is not a valid integer", buf.getvalue())
 
+    def test_forge_port_out_of_range_exits(self):
+        for bad in ("-1", "0", "65536", "99999"):
+            buf = io.StringIO()
+            with patch("sys.stdout", buf):
+                with self.assertRaises(SystemExit):
+                    ts.parse_args(["threadstone.py"], env={"FORGE_PORT": bad})
+            self.assertIn("must be 1-65535", buf.getvalue())
+
+    def test_forge_port_boundary_values_accepted(self):
+        cli = ts.parse_args(["threadstone.py"], env={"FORGE_PORT": "1"})
+        self.assertEqual(cli.port_override, 1)
+        cli = ts.parse_args(["threadstone.py"], env={"FORGE_PORT": "65535"})
+        self.assertEqual(cli.port_override, 65535)
+
 
 class TestTokenEst(unittest.TestCase):
     def test_english_text(self):
@@ -60,6 +74,33 @@ class TestTokenEst(unittest.TestCase):
     def test_mixed_text(self):
         hist = [{"role": "user", "content": "hello 世界"}]
         self.assertEqual(ts.token_est(hist), 3)
+
+
+class TestTrimHistory(unittest.TestCase):
+    def _turns(self, *roles):
+        return [{"role": r, "content": r} for r in roles]
+
+    def test_trim_preserves_system(self):
+        history = [{"role": "system", "content": "sys"}] + self._turns("user", "assistant", "user")
+        result = ts.trim_history(history, keep=2)
+        self.assertEqual(result[0]["role"], "system")
+
+    def test_odd_keep_drops_leading_assistant(self):
+        # keep=3 from [u, a, u, a, u, a, u, a, u, a] would give [a, u, a]
+        # the leading assistant must be dropped → [u, a]
+        turns = self._turns("user", "assistant") * 5
+        buf = io.StringIO()
+        with patch("sys.stdout", buf):
+            result = ts.trim_history(turns, keep=3)
+        self.assertEqual(result[0]["role"], "user", "slice must start with a user turn")
+
+    def test_result_always_starts_with_user(self):
+        for keep in range(1, 8):
+            turns = self._turns("user", "assistant") * 6
+            result = ts.trim_history(turns, keep=keep)
+            non_system = [m for m in result if m["role"] != "system"]
+            if non_system:
+                self.assertEqual(non_system[0]["role"], "user", f"keep={keep} starts with assistant")
 
 
 class TestDisplayHelpers(unittest.TestCase):
@@ -84,6 +125,25 @@ class TestDisplayHelpers(unittest.TestCase):
             ts.build_messages("", history),
             [{"role": "assistant", "content": ""}],
         )
+
+    def test_build_messages_skips_system_in_history(self):
+        # Prevents double system prompt when history contains a system entry.
+        history = [
+            {"role": "system", "content": "old prompt"},
+            {"role": "user", "content": "hi"},
+        ]
+        result = ts.build_messages("new prompt", history)
+        system_msgs = [m for m in result if m["role"] == "system"]
+        self.assertEqual(len(system_msgs), 1)
+        self.assertEqual(system_msgs[0]["content"], "new prompt")
+
+    def test_build_messages_no_system_in_history_no_prompt(self):
+        history = [
+            {"role": "system", "content": "old"},
+            {"role": "user", "content": "hi"},
+        ]
+        result = ts.build_messages("", history)
+        self.assertFalse(any(m["role"] == "system" for m in result))
 
 
 class TestReadPath(unittest.TestCase):
@@ -126,6 +186,15 @@ class TestReadPath(unittest.TestCase):
         _, text, _ = ts.read_path(str(path), 1024)
         self.assertIn("hello", text)
 
+    def test_binary_with_utf16_pattern_is_rejected(self):
+        # \x02\x00 pairs have null bytes (enter the UTF-16 path) and decode on
+        # little-endian (Apple Silicon) to U+0002 (STX), a non-printable control
+        # character.  The printable-ratio check must reject the result.
+        raw = b"\x02\x00" * 512
+        path = self._make_file("data.bin", raw)
+        with self.assertRaises(ValueError):
+            ts.read_path(str(path), 4096)
+
     @unittest.skipIf(os.getuid() == 0, "root bypasses permission checks")
     def test_permission_denied_file(self):
         path = self._make_file("secret.txt", b"secret")
@@ -135,6 +204,18 @@ class TestReadPath(unittest.TestCase):
                 ts.read_path(str(path), 1024)
         finally:
             path.chmod(0o644)
+
+
+class TestIsPrintableText(unittest.TestCase):
+    def test_clean_text_passes(self):
+        self.assertTrue(ts._is_printable_text("hello world\n"))
+
+    def test_binary_garbage_fails(self):
+        garbage = "".join(chr(i) for i in range(1, 32) if i not in (9, 10, 13)) * 100
+        self.assertFalse(ts._is_printable_text(garbage))
+
+    def test_empty_string_fails(self):
+        self.assertFalse(ts._is_printable_text(""))
 
 
 class TestStreamResponse(unittest.TestCase):
@@ -211,6 +292,16 @@ class TestConfigValidate(unittest.TestCase):
 
     def test_missing_model_field_raises(self):
         del cfg.MODELS["9B"]["port"]
+        with self.assertRaises(ValueError):
+            cfg.validate()
+
+    def test_missing_ram_gb_raises(self):
+        del cfg.MODELS["9B"]["ram_gb"]
+        with self.assertRaises(ValueError):
+            cfg.validate()
+
+    def test_zero_ram_gb_raises(self):
+        cfg.MODELS["9B"]["ram_gb"] = 0.0
         with self.assertRaises(ValueError):
             cfg.validate()
 
