@@ -1,0 +1,33 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  tests:
+    name: Python tests
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+
+      - name: Create dummy venv for config validation
+        run: python3 -m venv ~/mlx-env
+
+      - name: Run tests
+        run: python3 -m unittest test_threadstone -v
+
+  setup-check:
+    name: Setup script syntax
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Syntax check
+        run: bash -n setup.sh
