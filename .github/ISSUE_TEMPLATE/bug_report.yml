@@ -53,6 +53,13 @@ body:
       placeholder: "e.g. macOS 15.3, M4"
 
   - type: textarea
+    id: doctor
+    attributes:
+      label: Doctor output
+      description: Run `threadstone --doctor` and paste the output if setup or runtime startup is involved.
+      render: text
+
+  - type: textarea
     id: logs
     attributes:
       label: Logs

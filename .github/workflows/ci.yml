@@ -7,27 +7,64 @@ on:
     branches: [main]
 
 jobs:
-  tests:
-    name: Python tests
+  python-checks:
+    name: Python ${{ matrix.python-version }}
     runs-on: macos-15
-    steps:
-      - uses: actions/checkout@v4
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.13", "3.14"]
 
-      - uses: actions/setup-python@v5
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
         with:
-          python-version: "3.13"
+          python-version: ${{ matrix.python-version }}
 
       - name: Create dummy venv for config validation
         run: python3 -m venv ~/mlx-env
 
-      - name: Run tests
+      - name: Install package
+        run: python3 -m pip install -e .
+
+      - name: CLI smoke test
+        run: |
+          threadstone --version
+          threadstone --list-models
+
+      - name: Unit tests
         run: python3 -m unittest discover -s tests -t . -v
+
+      - name: Compile sources
+        run: python3 -m compileall config.py threadstone.py tests
+
+  package:
+    name: Package build
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.13"
+
+      - name: Install build tools
+        run: python3 -m pip install build twine
+
+      - name: Build distributions
+        run: python3 -m build --sdist --wheel
+
+      - name: Check distributions
+        run: python3 -m twine check dist/*
 
   setup-check:
     name: Setup script syntax
     runs-on: macos-15
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - name: Syntax check
         run: bash -n setup.sh

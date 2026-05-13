@@ -121,7 +121,9 @@ _pip_conf_set "${HOME}/.config/pip/pip.conf"
 info "installing mlx, mlx-lm, mlx-vlm..."
 pip install --quiet --upgrade pip
 pip install --quiet mlx mlx-lm "mlx-vlm[torch]"
+pip install --quiet --editable "${ORACLE_DIR}"
 ok "packages installed: $(pip show mlx-vlm | grep Version)"
+ok "threadstone cli: $(command -v threadstone)"
 
 # ── 7. download models (requires network — one time only) ─────────────────────
 info "downloading models (this will take a while)..."
@@ -275,7 +277,7 @@ quench() {
 # threadstone.py owns argument parsing and per-instance server lifecycle.
 oracle() {
   source "${VENV}/bin/activate"
-  env \$(_offline_env) python3 "${ORACLE_DIR}/threadstone.py" "\$@"
+  env \$(_offline_env) threadstone "\$@"
 }
 # ─────────────────────────────────────────────────────────────────────────────
 ZSHBLOCK

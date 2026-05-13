@@ -1,24 +1,49 @@
+[build-system]
+requires = ["setuptools>=77"]
+build-backend = "setuptools.build_meta"
+
 [project]
 name = "threadstone"
-version = "1.0.0"
-description = "Offline terminal chat for local LLMs on Apple Silicon"
+version = "1.1.0"
+description = "Offline terminal chat for local MLX language models on Apple Silicon"
 readme = "README.md"
 license = "MIT"
 requires-python = ">=3.13"
-authors = [
-    { name = "Soroush Yousefpour" },
-]
-keywords = ["llm", "mlx", "apple-silicon", "offline", "chat", "terminal"]
+keywords = ["llm", "mlx", "apple-silicon", "offline", "chat", "terminal", "local-first", "qwen"]
 classifiers = [
     "Development Status :: 5 - Production/Stable",
     "Environment :: Console",
     "Intended Audience :: Developers",
-    "License :: OSI Approved :: MIT License",
     "Operating System :: MacOS",
+    "Operating System :: MacOS :: MacOS X",
     "Programming Language :: Python :: 3.13",
-    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+    "Programming Language :: Python :: 3.14",
+    "Programming Language :: Python :: 3 :: Only",
+    "Topic :: Terminals",
+    "Typing :: Typed",
 ]
 
+[project.optional-dependencies]
+runtime = [
+    "mlx",
+    "mlx-lm",
+    "mlx-vlm[torch]",
+]
+dev = [
+    "build",
+    "twine",
+]
+
+[project.scripts]
+threadstone = "threadstone:main"
+oracle = "threadstone:main"
+
 [project.urls]
+Homepage = "https://github.com/gabrimatic/threadstone"
 Repository = "https://github.com/gabrimatic/threadstone"
 Issues = "https://github.com/gabrimatic/threadstone/issues"
+Changelog = "https://github.com/gabrimatic/threadstone/blob/main/CHANGELOG.md"
+Security = "https://github.com/gabrimatic/threadstone/security/advisories/new"
+
+[tool.setuptools]
+py-modules = ["threadstone", "config"]

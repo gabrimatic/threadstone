@@ -4,8 +4,11 @@
 from __future__ import annotations
 
 import atexit
+import argparse
 import errno
+import hashlib
 import json
+import platform
 import os
 import re
 import socket
@@ -19,11 +22,13 @@ from dataclasses import dataclass
 from pathlib import Path
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from config import MAX_FILE_BYTES, MODELS, OFFLINE_ENV, REQ_TIMEOUT, RESTART_WAIT, SERVER_WAIT, TEMPERATURE, VENV
+from config import MAX_FILE_BYTES, MODELS, OFFLINE_ENV, REQ_TIMEOUT, RESTART_WAIT, SERVER_WAIT, SESSION_DIR, TEMPERATURE, VENV
 
+VERSION = "1.1.0"
 DIM = "\033[2m"
 CYAN = "\033[36m"
 RED = "\033[31m"
+GRN = "\033[32m"
 YEL = "\033[33m"
 BOLD = "\033[1m"
 RST = "\033[0m"
@@ -32,6 +37,7 @@ THINK = "\033[2;3m"
 THINK_CLOSE = "</think>"
 THINK_OPEN = "<think>"
 DIR_LIMIT = 200
+RESTORE_MAX_AGE_SECONDS = 24 * 60 * 60
 _MIN_PRINTABLE_RATIO = 0.70
 NETWORK_ERRORS = (
     urllib.error.URLError,
@@ -72,6 +78,8 @@ class CliConfig:
     model: ModelConfig
     port_override: int | None
     extra_args: list[str]
+    command: str = "chat"
+    check_all_models: bool = False
 
 
 @dataclass
@@ -315,15 +323,38 @@ def model_config(size: str) -> ModelConfig:
     )
 
 
+def _port_arg(value: str) -> int:
+    try:
+        port = int(value)
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError("must be an integer") from exc
+    if not (1 <= port <= 65535):
+        raise argparse.ArgumentTypeError("must be 1-65535")
+    return port
+
+
 def parse_args(argv: list[str], env: dict[str, str] | None = None) -> CliConfig:
     env = env or os.environ
-    first = argv[1].upper() if len(argv) > 1 else ""
+    parser = argparse.ArgumentParser(
+        prog=Path(argv[0]).name if argv else "threadstone",
+        description="Offline terminal chat for local MLX language models.",
+    )
+    parser.add_argument("chat_args", nargs="*", metavar="ARG", help="[system_prompt] [model_size] or [model_size]")
+    parser.add_argument("--port", type=_port_arg, help="Override the local inference server port for this run")
+    parser.add_argument("--list-models", action="store_true", help="Print configured models and exit")
+    parser.add_argument("--doctor", action="store_true", help="Check the local Threadstone setup and exit")
+    parser.add_argument("--all-models", action="store_true", help="With --doctor, check every configured model snapshot")
+    parser.add_argument("--version", action="version", version=f"%(prog)s {VERSION}")
+    ns = parser.parse_args(argv[1:] if argv else [])
+
+    chat_args = ns.chat_args
+    first = chat_args[0].upper() if chat_args else ""
     if first in MODELS:
         sys_prompt = ""
         size = first
-    elif len(argv) > 1:
-        sys_prompt = argv[1]
-        size = (argv[2] if len(argv) > 2 else "9B").upper()
+    elif chat_args:
+        sys_prompt = chat_args[0]
+        size = (chat_args[1] if len(chat_args) > 1 else "9B").upper()
     else:
         sys_prompt = ""
         size = "9B"
@@ -332,13 +363,13 @@ def parse_args(argv: list[str], env: dict[str, str] | None = None) -> CliConfig:
         print(f'{YEL}unknown size "{size}", using 9B{RST}')
         size = "9B"
 
-    extra_args = argv[3:] if first not in MODELS else argv[2:]
+    extra_args = chat_args[1:] if first in MODELS else chat_args[2:]
     if extra_args:
         print(f"{YEL}warning: extra arguments ignored: {extra_args}{RST}")
 
-    port_override = None
+    port_override = ns.port
     raw_port = env.get("FORGE_PORT")
-    if raw_port is not None and raw_port != "":
+    if port_override is None and raw_port is not None and raw_port != "":
         try:
             port_override = int(raw_port)
         except ValueError:
@@ -353,7 +384,72 @@ def parse_args(argv: list[str], env: dict[str, str] | None = None) -> CliConfig:
         model=model_config(size),
         port_override=port_override,
         extra_args=extra_args,
+        command="doctor" if ns.doctor else "list-models" if ns.list_models else "chat",
+        check_all_models=ns.all_models,
     )
+
+
+def print_model_list() -> None:
+    print("size   port   thinking   max tokens   context   model path")
+    for key in MODELS:
+        model = model_config(key)
+        thinking = "yes" if model.thinking else "no"
+        print(
+            f"{model.size:<6} {model.port:<6} {thinking:<10} {model.max_tokens:<12} "
+            f"{model.ctx_trim:<9} {model.path}"
+        )
+
+
+def _doctor_row(ok: bool, label: str, detail: str) -> bool:
+    status = "ok" if ok else "fail"
+    color = GRN if ok else RED
+    print(f"{color}{status:<4}{RST} {label:<18} {detail}")
+    return ok
+
+
+def _venv_has_mlx_server() -> bool:
+    python = VENV / "bin/python3"
+    if not python.exists():
+        return False
+    try:
+        result = subprocess.run(
+            [
+                str(python),
+                "-c",
+                "import importlib.util; raise SystemExit(0 if importlib.util.find_spec('mlx_vlm.server') else 1)",
+            ],
+            env={**os.environ, **OFFLINE_ENV},
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            timeout=10,
+            check=False,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return False
+    return result.returncode == 0
+
+
+def run_doctor(cli: CliConfig) -> int:
+    checks: list[bool] = []
+    checks.append(_doctor_row(platform.system() == "Darwin", "platform", f"{platform.system()} {platform.machine()}"))
+    checks.append(_doctor_row(platform.machine() == "arm64", "chip", "Apple Silicon required"))
+    checks.append(_doctor_row(sys.version_info >= (3, 13), "python", platform.python_version()))
+    checks.append(_doctor_row((VENV / "bin/python3").exists(), "venv", str(VENV)))
+    checks.append(_doctor_row(_venv_has_mlx_server(), "mlx-vlm", "mlx_vlm.server importable from venv"))
+
+    expected_env = all(os.environ.get(key) == value for key, value in OFFLINE_ENV.items())
+    checks.append(_doctor_row(expected_env, "offline env", "Hugging Face offline and telemetry flags applied"))
+
+    models = [model_config(key) for key in MODELS] if cli.check_all_models else [cli.model]
+    for model in models:
+        checks.append(_doctor_row(model.path.exists(), f"model {model.size}", str(model.path)))
+
+    port = cli.port_override or cli.model.port
+    available = ServerManager._port_available(port)
+    detail = f"127.0.0.1:{port} available" if available else f"127.0.0.1:{port} already in use"
+    checks.append(_doctor_row(available, "port", detail))
+
+    return 0 if all(checks) else 1
 
 
 def _is_cjk(ch: str) -> bool:
@@ -420,7 +516,7 @@ def _is_printable_text(text: str, sample: int = 4096) -> bool:
 
 
 def decode_attachment_bytes(raw: bytes, path: Path) -> str:
-    # Explicit BOM — trust it, but verify the result is actual text.
+    # Explicit BOM: trust it, but verify the result is actual text.
     if raw[:2] in (b"\xff\xfe", b"\xfe\xff"):
         decoded = raw.decode("utf-16", errors="replace")
         if not _is_printable_text(decoded):
@@ -495,6 +591,7 @@ def print_help() -> None:
     print("/drop         clear the pending attachment")
     print("/clear        clear history and pending attachment")
     print("/history      show conversation history")
+    print("/restore      restore the saved session for this terminal tab")
     print("/help         show this message")
     print(f"exit / quit   end session{RST}")
 
@@ -623,6 +720,61 @@ def append_assistant_message(history: list[dict[str, str]], result: StreamResult
     history.append({"role": "assistant", "content": content, "api_content": result.api_text.strip()})
 
 
+def _terminal_identity() -> str:
+    for key in ("THREADSTONE_SESSION", "TERM_SESSION_ID", "WT_SESSION", "TMUX_PANE"):
+        value = os.environ.get(key)
+        if value:
+            return value
+    try:
+        return os.ttyname(sys.stdin.fileno())
+    except OSError:
+        return "default"
+
+
+def session_path(model_size: str) -> Path:
+    digest = hashlib.sha256(_terminal_identity().encode("utf-8", errors="replace")).hexdigest()[:12]
+    return SESSION_DIR / f"{model_size.lower()}-{digest}.json"
+
+
+def save_history(path: Path, history: list[dict[str, str]]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    payload = {
+        "version": 1,
+        "saved_at": time.time(),
+        "history": history,
+    }
+    tmp = path.with_suffix(".tmp")
+    tmp.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
+    tmp.replace(path)
+
+
+def load_history(path: Path, max_age_seconds: int = RESTORE_MAX_AGE_SECONDS) -> list[dict[str, str]]:
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise ValueError(f"cannot restore session: {exc}") from exc
+    saved_at = payload.get("saved_at")
+    if not isinstance(saved_at, (int, float)) or time.time() - saved_at > max_age_seconds:
+        raise ValueError("saved session is older than 24 hours")
+    history = payload.get("history")
+    if not isinstance(history, list):
+        raise ValueError("saved session is invalid")
+    restored: list[dict[str, str]] = []
+    for message in history:
+        if not isinstance(message, dict):
+            raise ValueError("saved session contains an invalid message")
+        role = message.get("role")
+        content = message.get("content")
+        if role not in {"system", "user", "assistant"} or not isinstance(content, str):
+            raise ValueError("saved session contains an invalid message")
+        item = {"role": role, "content": content}
+        api_content = message.get("api_content")
+        if isinstance(api_content, str):
+            item["api_content"] = api_content
+        restored.append(item)
+    return restored
+
+
 def run_chat(cli: CliConfig) -> int:
     if not cli.model.path.exists():
         print(f"{RED}model not on disk: {cli.model.path}{RST}")
@@ -635,9 +787,12 @@ def run_chat(cli: CliConfig) -> int:
 
     history: list[dict[str, str]] = []
     attachment: tuple[str, str] | None = None
+    restore_path = session_path(cli.model.size)
 
     clear_wait = f"\r{' ' * 50}\r" if server.printed_waiting else ""
     print(f"{clear_wait}{BOLD}threadstone {cli.model.size}{RST}  {DIM}{prompt_display(cli.sys_prompt)}{RST}\n")
+    if restore_path.exists():
+        print(f"{DIM}/restore available from {restore_path}{RST}")
 
     while True:
         if token_est(history) > cli.model.ctx_trim:
@@ -672,7 +827,19 @@ def run_chat(cli: CliConfig) -> int:
             if cmd == "/clear":
                 history = []
                 attachment = None
+                try:
+                    restore_path.unlink(missing_ok=True)
+                except OSError:
+                    pass
                 print(f"{DIM}cleared{RST}")
+
+            elif cmd == "/restore":
+                try:
+                    history = load_history(restore_path)
+                    attachment = None
+                    print(f"{DIM}restored {len(history)} messages{RST}")
+                except ValueError as exc:
+                    print(f"{RED}error: {exc}{RST}")
 
             elif cmd == "/history":
                 shown = False
@@ -731,6 +898,7 @@ def run_chat(cli: CliConfig) -> int:
                 append_assistant_message(history, result)
             else:
                 history.append({"role": "assistant", "content": "(no answer produced)", "api_content": ""})
+            save_history(restore_path, history)
             print()
         except urllib.error.HTTPError as exc:
             history.pop()
@@ -748,9 +916,11 @@ def run_chat(cli: CliConfig) -> int:
                     finally:
                         response.close()
                     append_assistant_message(history, result)
+                    save_history(restore_path, history)
                     print()
                 except StreamInterrupted as exc:
                     append_assistant_message(history, exc.result)
+                    save_history(restore_path, history)
                     print(f"{DIM}interrupted{RST}")
                 except urllib.error.HTTPError as retry_exc:
                     history.pop()
@@ -762,6 +932,7 @@ def run_chat(cli: CliConfig) -> int:
                 print(f"{RED}server restart failed: {exc}{RST}")
         except StreamInterrupted as exc:
             append_assistant_message(history, exc.result)
+            save_history(restore_path, history)
             print(f"{DIM}interrupted{RST}")
 
     return 0
@@ -769,6 +940,11 @@ def run_chat(cli: CliConfig) -> int:
 
 def main(argv: list[str] | None = None) -> int:
     cli = parse_args(argv or sys.argv)
+    if cli.command == "list-models":
+        print_model_list()
+        return 0
+    if cli.command == "doctor":
+        return run_doctor(cli)
     return run_chat(cli)
 
 

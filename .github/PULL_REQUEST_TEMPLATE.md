@@ -22,8 +22,11 @@ _List any changes to behavior, config, UI, or CLI. Write `None` if internal only
 
 ## Checklist
 
-- [ ] Tests pass (`python3 -m unittest test_threadstone`)
+- [ ] Tests pass (`python3 -m unittest discover -s tests -t . -v`)
+- [ ] Package builds (`python3 -m build --sdist --wheel`)
+- [ ] Package metadata passes (`python3 -m twine check dist/*`)
 - [ ] README updated (if behavior changed)
+- [ ] CHANGELOG updated (if behavior changed)
 - [ ] No breaking config changes (or migration notes below)
 - [ ] Offline enforcement preserved (no network calls at runtime)
 

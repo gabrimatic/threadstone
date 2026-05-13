@@ -1,5 +1,5 @@
 blank_issues_enabled: false
 contact_links:
-  - name: Discussions
-    url: https://github.com/gabrimatic/threadstone/discussions
-    about: "Questions, ideas, or general conversation about Threadstone."
+  - name: Security reports
+    url: https://github.com/gabrimatic/threadstone/security/advisories/new
+    about: "Report vulnerabilities privately. Do not open public security issues."

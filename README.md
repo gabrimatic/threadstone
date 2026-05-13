@@ -1,19 +1,20 @@
 # Threadstone
 
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+[![CI](https://github.com/gabrimatic/threadstone/actions/workflows/ci.yml/badge.svg)](https://github.com/gabrimatic/threadstone/actions/workflows/ci.yml)
+[![PyPI](https://img.shields.io/pypi/v/threadstone.svg)](https://pypi.org/project/threadstone/)
+[![License: MIT](https://img.shields.io/badge/license-MIT-yellow.svg)](LICENSE)
 [![Platform: macOS](https://img.shields.io/badge/platform-macOS-lightgrey.svg)]()
 [![Apple Silicon](https://img.shields.io/badge/Apple_Silicon-required-blue.svg)]()
 [![Python 3.13+](https://img.shields.io/badge/Python-3.13+-blue.svg)]()
+[![Local-first](https://img.shields.io/badge/local--first-MLX-green.svg)]()
 
-**Offline terminal chat for local LLMs on Apple Silicon. No cloud, no telemetry, no network after setup.**
+Threadstone is offline terminal chat for local MLX language models on Apple Silicon. It starts a local `mlx-vlm` server for the model you choose, streams the answer into your terminal, keeps the conversation usable across crashes, and shuts the server down when you leave.
 
-Runs [mlx-vlm](https://github.com/Blaizzy/mlx-vlm) inference servers locally, streams responses with ANSI-styled output, manages its own server lifecycle. Stdlib only, zero third-party dependencies in the client.
-
----
+The useful part is ownership. The network is only for setup and model downloads. After that, chat runs against local snapshots with Hugging Face offline flags, no telemetry, no hosted API, and no account.
 
 ## Quick Start
 
-**Apple Silicon required.** Models are downloaded once during setup (~12 GB total).
+Requirements: **macOS**, **Apple Silicon**, **Python 3.13+**, Homebrew, and about **12 GB** for the default model set.
 
 ```bash
 git clone https://github.com/gabrimatic/threadstone.git
@@ -21,71 +22,40 @@ cd threadstone
 ./setup.sh
 ```
 
-One command. Creates a Python venv, installs MLX packages, downloads four Qwen3.5 models, writes shell aliases.
+`setup.sh` creates `~/mlx-env`, installs the MLX runtime, downloads the configured Qwen model snapshots, installs the `threadstone` CLI, and writes shell helpers for `oracle`, `forge`, and `quench`.
 
-```sh
-oracle              # 9B model, no system prompt
-oracle 4B           # choose model size
-oracle "be terse"   # system prompt, default 9B
+Start a chat:
+
+```bash
+oracle
+oracle 4B
 oracle "be terse" 2B
 ```
 
----
+Use the installed CLI directly:
 
-## Commands
-
-| Command | Effect |
-|---------|--------|
-| `/read <path>` | Attach a file or directory to the next message |
-| `/drop` | Cancel pending attachment |
-| `/history` | Show conversation turns |
-| `/restore` | Reload session from the current tab |
-| `/clear` | Reset conversation and attachment |
-| `/help` | List available commands |
-| `exit` / `quit` | End session |
-
----
-
-## Models
-
-All 4-bit quantised, MLX format, from [mlx-community](https://huggingface.co/mlx-community) on HuggingFace. Downloaded once, local forever.
-
-| Key | Model | Thinking | Defaults |
-|-----|-------|----------|----------|
-| `9B` | Qwen3.5-9B-MLX-4bit | yes | 4096 tokens, 8K context |
-| `4B` | Qwen3.5-4B-MLX-4bit | yes | 4096 tokens, 8K context |
-| `2B` | Qwen3.5-2B-MLX-4bit | no | 2048 tokens, 4K context |
-| `0.8B` | Qwen3.5-0.8B-MLX-4bit | no | 1024 tokens, 2K context |
-
-Each model has its own port, max tokens, and context thresholds configured in `config.py`.
-
-### Adding a Model
-
-1. Add an entry to the `MODELS` dict in `config.py`
-2. Add the matching port to `_forge_port` in your shell rc file
-3. Run `setup.sh` to download and configure
-
-### Thinking Mode
-
-Larger models (9B, 4B) emit a reasoning block before answering. The reasoning streams in dim italic, a separator line marks the transition, and the final answer prints at full brightness. Smaller models (2B, 0.8B) answer directly.
-
-If a thinking model exhausts its token budget during reasoning without producing an answer, a `(no answer produced)` notice appears and ANSI codes reset cleanly.
-
----
-
-## Multi-Instance
-
-Each `oracle` session manages its own server. Open five terminals, run `oracle` in each. Port conflicts are detected automatically and resolved by assigning the next available port. No shared state, no interleaved output.
-
-When a session exits, its server is stopped. No orphan processes.
-
----
-
-## Offline Enforcement
-
-Every process (server and client) runs with these environment variables:
-
+```bash
+threadstone --list-models
+threadstone --doctor
+threadstone "answer like a systems engineer" 9B
 ```
+
+## Local Runtime
+
+Threadstone uses the network during setup. Runtime chat stays on localhost and local model files.
+
+| Path | Runtime scope |
+|------|---------------|
+| Model snapshots | Hugging Face cache on disk |
+| Inference server | `mlx_vlm.server` on `127.0.0.1` |
+| Chat client | Python stdlib HTTP and SSE client |
+| Session history | In memory for the current terminal session |
+| Session restore | `~/.cache/threadstone/` per model and terminal tab |
+| Telemetry | Disabled through environment flags |
+
+Offline guard:
+
+```text
 HF_HUB_OFFLINE=1
 TRANSFORMERS_OFFLINE=1
 HF_DATASETS_OFFLINE=1
@@ -97,49 +67,127 @@ DISABLE_TELEMETRY=1
 ANONYMIZED_TELEMETRY=0
 ```
 
-`HF_HUB_OFFLINE=1` causes `huggingface_hub` to raise on any HTTP attempt. Verified with a socket-level intercept test during setup: zero external connections at import or runtime.
+## Commands
 
----
+Inside chat:
 
-## Session Persistence
+| Command | Effect |
+|---------|--------|
+| `/read <path>` | Attach a file or directory listing to the next message |
+| `/drop` | Cancel the pending attachment |
+| `/history` | Show recent visible conversation turns |
+| `/restore` | Restore the saved session for this terminal tab |
+| `/clear` | Reset conversation state and pending attachment |
+| `/help` | Show in-session commands |
+| `exit` / `quit` | Stop the chat and terminate the owned server |
 
-Conversation history is saved per model size and terminal tab. If the process exits unexpectedly, `/restore` reloads the session (up to 24 hours). History files live in `~/.cache/threadstone/`.
+Shell helpers from `setup.sh`:
 
----
+| Command | Effect |
+|---------|--------|
+| `oracle [prompt] [size]` | Start chat with an owned server |
+| `forge [size]` | Start a manual background server |
+| `quench [size|all]` | Stop manual servers on default ports |
+| `threadstone --doctor` | Check platform, venv, model snapshots, offline flags, and port state |
+| `threadstone --list-models` | Print configured models, ports, context limits, and paths |
 
-## Self-Healing
+## Models
 
-If the server crashes mid-session, the client detects the broken connection, restarts `mlx_vlm.server`, waits for health, and automatically resends the last message. Server logs are written to a temp file and printed on failure for diagnostics.
+Default models are 4-bit MLX snapshots from `mlx-community`.
 
----
+| Key | Model | Thinking | Max tokens | Context trim |
+|-----|-------|----------|------------|--------------|
+| `9B` | Qwen3.5-9B-MLX-4bit | Yes | 4096 | 8000 |
+| `4B` | Qwen3.5-4B-MLX-4bit | Yes | 4096 | 8000 |
+| `2B` | Qwen3.5-2B-MLX-4bit | No | 2048 | 4000 |
+| `0.8B` | Qwen3.5-0.8B-MLX-4bit | No | 1024 | 2000 |
 
-## Shell Aliases
+Each model has its own default port, memory estimate, context threshold, and response budget in `config.py`.
 
-Installed by `setup.sh` into your shell rc file (zsh or bash):
+## Behavior
 
-```sh
-oracle [prompt] [size]   # start server + chat
-forge  [size]            # start server only (background)
-quench [size|all]        # stop server(s)
-```
+Threadstone owns the server lifecycle for normal chat.
 
----
+- **Port recovery**: if the default port is busy, Threadstone scans forward and starts the model on the next available localhost port.
+- **RAM guard**: startup checks free and reclaimable memory before launching a model, including other reachable model servers.
+- **Crash recovery**: if the server disappears during a turn, Threadstone restarts it and resends the pending message.
+- **Thinking models**: reasoning streams dimmed until `</think>`, then the final answer prints normally and only the final answer is sent back in later history.
+- **Attachments**: `/read` accepts text files and directory listings, rejects non-regular files, rejects binary-looking content, and caps file payloads at 50 KB.
+- **Context trimming**: old turns are trimmed when the approximate context crosses the configured threshold while preserving valid role alternation.
 
 ## Architecture
 
-Two core files, clear separation:
+```text
+oracle / threadstone
+    |
+    v
+threadstone.py
+    |-- argument parsing, doctor, REPL, streaming, history
+    |-- ServerManager starts and monitors mlx_vlm.server
+    |-- /read attaches bounded local text context
+    |
+    v
+config.py
+    |-- model registry, ports, limits, memory estimates
+    |-- snapshot resolution from the Hugging Face cache
+    |-- offline environment guard
+```
+
+Files:
 
 | File | Role |
 |------|------|
-| `config.py` | All tunables: model paths, ports, inference params, context limits, offline env vars |
-| `threadstone.py` | The engine: server management, streaming, REPL, history. Stdlib only |
-| `setup.sh` | One-time installer: venv, models, shell aliases |
-| `tests/` | Unit tests |
+| `threadstone.py` | CLI, server lifecycle, chat loop, streaming parser, attachment handling |
+| `config.py` | Model registry, offline env, runtime limits, validation |
+| `setup.sh` | One-time macOS installer and shell helper setup |
+| `tests/` | Unit coverage for parsing, streaming, history, config, attachments, and snapshots |
 
----
+## Development
 
-## Requirements
+```bash
+python3 -m venv .venv
+source .venv/bin/activate
+pip install -e ".[dev]"
+python3 -m unittest discover -s tests -t . -v
+python3 -m build --sdist --wheel
+python3 -m twine check dist/*
+```
 
-- macOS on Apple Silicon (MLX is Metal-only)
-- Python 3.13+
-- ~12 GB disk for all four models
+Run the CLI without starting a model:
+
+```bash
+threadstone --version
+threadstone --list-models
+```
+
+Run the local setup check after `./setup.sh`:
+
+```bash
+threadstone --doctor --all-models
+```
+
+## Package Release
+
+Threadstone is a Python package, so the package registry is **PyPI**, not pub.dev. pub.dev is for Dart and Flutter packages.
+
+Release path:
+
+1. Update `CHANGELOG.md` and `pyproject.toml`.
+2. Run tests, build, and `twine check`.
+3. Create a GitHub release tag such as `v1.1.0`.
+4. The release workflow builds the sdist and wheel, then publishes to PyPI through Trusted Publishing.
+
+PyPI Trusted Publishing must be configured for:
+
+| Field | Value |
+|-------|-------|
+| Owner | `gabrimatic` |
+| Repository | `threadstone` |
+| Workflow | `release.yml` |
+| Environment | `pypi` |
+
+## Security
+
+Runtime chat is local by design, but model files and dependencies still come from external package and model hosts during setup.
+
+Report vulnerabilities through [GitHub private vulnerability reporting](https://github.com/gabrimatic/threadstone/security/advisories/new). Do not open a public issue for security reports.

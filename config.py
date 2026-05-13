@@ -1,9 +1,9 @@
-# oracle config — all settings live here
+# oracle config - all settings live here
 # Edit this file to change anything. threadstone.py is just the engine.
 import os
 from pathlib import Path
 
-# ── offline guard — applied immediately so the main process is also covered ───
+# -- offline guard - applied immediately so the main process is also covered ---
 # Subprocesses inherit os.environ, so setting here covers everything.
 # Do not remove these. They are what makes the app 100% offline.
 OFFLINE_ENV = {
@@ -19,10 +19,13 @@ OFFLINE_ENV = {
 }
 os.environ.update(OFFLINE_ENV)
 
-# ── venv — override with THREADSTONE_VENV env var ─────────────────────────────
+# -- venv - override with THREADSTONE_VENV env var ----------------------------
 VENV = Path(os.environ.get("THREADSTONE_VENV", Path.home() / "mlx-env"))
 
-# ── HF cache — respects HF_HOME and XDG_CACHE_HOME before falling back ────────
+# -- state - conversation restore files ---------------------------------------
+SESSION_DIR = Path(os.environ.get("THREADSTONE_STATE_DIR", Path.home() / ".cache/threadstone"))
+
+# -- HF cache - respects HF_HOME and XDG_CACHE_HOME before falling back --------
 def _hf_cache() -> Path:
     if hf_home := os.environ.get("HF_HOME"):
         return Path(hf_home) / "hub"
@@ -32,7 +35,7 @@ def _hf_cache() -> Path:
 
 _HF = _hf_cache()
 
-# ── snapshot resolution — finds the latest snapshot without hardcoding hashes ──
+# -- snapshot resolution - finds the latest snapshot without hardcoding hashes -
 # Strategy:
 #   1. Check refs/main for the pinned hash (most reliable).
 #   2. Fall back to the single entry in snapshots/ if there's exactly one.
@@ -55,7 +58,7 @@ def _snapshot(repo: str, fallback_hash: str) -> Path:
         pass
     return snapshots_dir / fallback_hash  # original hardcoded path as last resort
 
-# ── models: per-size runtime config ───────────────────────────────────────────
+# -- models: per-size runtime config ------------------------------------------
 # Add a new model here and one entry in _forge_port() in setup.sh.
 # ram_gb: approximate peak unified memory usage (model weights + MLX overhead).
 # Used for the pre-launch memory guard.
@@ -103,16 +106,16 @@ MODELS: dict[str, dict[str, object]] = {
 }
 
 TEMPERATURE = 0.7   # 0.0 = deterministic, 1.0 = creative
-REQ_TIMEOUT = 300   # seconds — max wait for a response
+REQ_TIMEOUT = 300   # seconds - max wait for a response
 
-# ── server ────────────────────────────────────────────────────────────────────
-SERVER_WAIT  = 20   # seconds — wait for server to become healthy on startup
-RESTART_WAIT = 25   # seconds — wait after auto-restart on crash
+# -- server -------------------------------------------------------------------
+SERVER_WAIT  = 20   # seconds - wait for server to become healthy on startup
+RESTART_WAIT = 25   # seconds - wait after auto-restart on crash
 
-# ── /read attachment ──────────────────────────────────────────────────────────
-MAX_FILE_BYTES = 51200  # 50 KB cap — larger files are truncated
+# -- /read attachment ---------------------------------------------------------
+MAX_FILE_BYTES = 51200  # 50 KB cap - larger files are truncated
 
-# ── validation ────────────────────────────────────────────────────────────────
+# -- validation ---------------------------------------------------------------
 def validate():
     errors = []
 

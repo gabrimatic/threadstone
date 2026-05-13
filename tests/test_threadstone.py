@@ -3,8 +3,10 @@ import json
 import os
 import stat
 import tempfile
+import time
 import unittest
 from copy import deepcopy
+from contextlib import redirect_stderr
 from pathlib import Path
 from unittest.mock import patch
 
@@ -60,6 +62,26 @@ class TestParseArgs(unittest.TestCase):
         self.assertEqual(cli.port_override, 1)
         cli = ts.parse_args(["threadstone.py"], env={"FORGE_PORT": "65535"})
         self.assertEqual(cli.port_override, 65535)
+
+    def test_cli_port_overrides_environment(self):
+        cli = ts.parse_args(["threadstone.py", "--port", "8123"], env={"FORGE_PORT": "8089"})
+        self.assertEqual(cli.port_override, 8123)
+
+    def test_list_models_command(self):
+        cli = ts.parse_args(["threadstone.py", "--list-models"])
+        self.assertEqual(cli.command, "list-models")
+        self.assertEqual(cli.model.size, "9B")
+
+    def test_doctor_command_can_check_all_models(self):
+        cli = ts.parse_args(["threadstone.py", "--doctor", "--all-models", "2B"])
+        self.assertEqual(cli.command, "doctor")
+        self.assertTrue(cli.check_all_models)
+        self.assertEqual(cli.model.size, "2B")
+
+    def test_invalid_cli_port_exits(self):
+        with redirect_stderr(io.StringIO()):
+            with self.assertRaises(SystemExit):
+                ts.parse_args(["threadstone.py", "--port", "65536"])
 
 
 class TestTokenEst(unittest.TestCase):
@@ -277,6 +299,37 @@ class TestAppendAssistantMessage(unittest.TestCase):
         )
         self.assertEqual(history[0]["content"], "reasoning")
         self.assertEqual(history[0]["api_content"], "")
+
+
+class TestSessionPersistence(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp()
+        self.path = Path(self.tmp) / "session.json"
+
+    def tearDown(self):
+        import shutil
+
+        shutil.rmtree(self.tmp, ignore_errors=True)
+
+    def test_save_and_load_history(self):
+        history = [
+            {"role": "user", "content": "hi"},
+            {"role": "assistant", "content": "hello", "api_content": "hello"},
+        ]
+        ts.save_history(self.path, history)
+        self.assertEqual(ts.load_history(self.path), history)
+
+    def test_old_history_is_rejected(self):
+        payload = {"version": 1, "saved_at": time.time() - 10, "history": []}
+        self.path.write_text(json.dumps(payload), encoding="utf-8")
+        with self.assertRaises(ValueError):
+            ts.load_history(self.path, max_age_seconds=1)
+
+    def test_invalid_history_is_rejected(self):
+        payload = {"version": 1, "saved_at": time.time(), "history": [{"role": "tool", "content": "x"}]}
+        self.path.write_text(json.dumps(payload), encoding="utf-8")
+        with self.assertRaises(ValueError):
+            ts.load_history(self.path)
 
 
 class TestConfigValidate(unittest.TestCase):
