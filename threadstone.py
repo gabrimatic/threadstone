@@ -421,7 +421,7 @@ def _venv_has_mlx_server() -> bool:
             env={**os.environ, **OFFLINE_ENV},
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
-            timeout=10,
+            timeout=30,
             check=False,
         )
     except (OSError, subprocess.TimeoutExpired):
@@ -640,6 +640,8 @@ def stream_response(resp, thinking: bool) -> StreamResult:
             try:
                 token = json.loads(chunk)["choices"][0]["delta"].get("content", "")
             except (ValueError, KeyError, IndexError):
+                continue
+            if token is None:
                 continue
 
             raw_text += token
