@@ -2,6 +2,7 @@ import io
 import json
 import os
 import stat
+import subprocess
 import tempfile
 import time
 import unittest
@@ -253,6 +254,15 @@ class TestStreamResponse(unittest.TestCase):
         self.assertEqual(result.api_text, "hello world")
         self.assertIn("hello world", out)
 
+    def test_null_content_delta_is_ignored(self):
+        try:
+            result, out = self._capture(_sse(None, "OK"), thinking=False)
+        except TypeError as exc:
+            self.fail(f"null content delta should be ignored: {exc}")
+        self.assertEqual(result.history_text, "OK")
+        self.assertEqual(result.api_text, "OK")
+        self.assertIn("OK", out)
+
     def test_thinking_response_strips_reasoning_from_history(self):
         result, out = self._capture(_sse("reason", "</thi", "nk>", "answer"), thinking=True)
         self.assertEqual(result.history_text, "answer")
@@ -282,6 +292,22 @@ class TestStreamResponse(unittest.TestCase):
                 ts.stream_response(InterruptingResponse(), thinking=False)
         self.assertEqual(ctx.exception.result.history_text, "partial")
         self.assertEqual(ctx.exception.result.api_text, "partial")
+
+
+class TestRuntimeChecks(unittest.TestCase):
+    def test_mlx_server_import_check_allows_slow_cold_import(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            python = Path(tmp) / "bin" / "python3"
+            python.parent.mkdir()
+            python.write_text("")
+            python.chmod(0o755)
+            completed = subprocess.CompletedProcess(args=[str(python)], returncode=0)
+
+            with patch.object(ts, "VENV", Path(tmp)):
+                with patch("threadstone.subprocess.run", return_value=completed) as run:
+                    self.assertTrue(ts._venv_has_mlx_server())
+
+            self.assertGreaterEqual(run.call_args.kwargs["timeout"], 30)
 
 
 class TestAppendAssistantMessage(unittest.TestCase):
