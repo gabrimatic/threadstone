@@ -11,6 +11,7 @@ import json
 import platform
 import os
 import re
+import select
 import socket
 import subprocess
 import sys
@@ -22,9 +23,13 @@ from dataclasses import dataclass
 from pathlib import Path
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from config import MAX_FILE_BYTES, MODELS, OFFLINE_ENV, REQ_TIMEOUT, RESTART_WAIT, SERVER_WAIT, SESSION_DIR, TEMPERATURE, VENV
+try:
+    from config import MAX_FILE_BYTES, MODELS, OFFLINE_ENV, REQ_TIMEOUT, RESTART_WAIT, SERVER_WAIT, SESSION_DIR, TEMPERATURE, VENV
+except ValueError as exc:
+    print(f"config error: {exc}", file=sys.stderr)
+    raise SystemExit(2)
 
-VERSION = "1.1.0"
+VERSION = "1.2.0"
 DIM = "\033[2m"
 CYAN = "\033[36m"
 RED = "\033[31m"
@@ -145,10 +150,20 @@ class ServerManager:
         self.printed_waiting = False
 
     def start(self) -> bool:
+        preferred = self.cli.port_override or self.cli.model.port
+        try:
+            candidate = self._find_available_port(preferred)
+        except RuntimeError as exc:
+            print(f"{RED}{exc}{RST}")
+            return False
+
         available_gb = _vm_stat_available_gb()
         if available_gb is not None:
             model_ram_gb = self.cli.model.ram_gb
-            running_gb = _running_model_ram_gb(self.cli.model.port)
+            # Exclude the port we're about to bind (free, nothing to count).
+            # Excluding the model's default port instead would miss another
+            # instance of the same model already running there.
+            running_gb = _running_model_ram_gb(candidate)
             if running_gb > 0:
                 print(f"{DIM}other model servers: ~{running_gb:.1f} GB in use{RST}")
             # Threshold is 1.5× model size: ram_gb already includes MLX overhead,
@@ -159,13 +174,6 @@ class ServerManager:
                     f"~{model_ram_gb:.1f} GB needed for {self.cli.model.size}{RST}"
                 )
                 return False
-
-        preferred = self.cli.port_override or self.cli.model.port
-        try:
-            candidate = self._find_available_port(preferred)
-        except RuntimeError as exc:
-            print(f"{RED}{exc}{RST}")
-            return False
 
         for _ in range(10):
             self.port = candidate
@@ -184,7 +192,11 @@ class ServerManager:
                     print(f"{RED}{exc}{RST}")
                     return False
                 continue
+            # Health never came up: kill the spawned process or it outlives us
+            # (atexit cleanup is only registered after a successful start).
+            self.stop()
             return False
+        self.stop()
         return False
 
     def stop(self) -> None:
@@ -212,10 +224,8 @@ class ServerManager:
         print(f"{YEL}server unavailable, restarting...{RST}")
         self.stop()
         self._spawn()
-        ok = self.wait_for_health(RESTART_WAIT)
-        if not ok:
-            self._print_log_tail()
-        return ok
+        # wait_for_health already prints the failure line and log tail.
+        return self.wait_for_health(RESTART_WAIT)
 
     def wait_for_health(self, secs: int) -> bool:
         self.printed_waiting = False
@@ -260,7 +270,9 @@ class ServerManager:
         self.stop()
         self.log_fh = open(self.log_path, "w", encoding="utf-8")
         self.proc = subprocess.Popen(
-            [str(VENV / "bin/python3"), "-m", "mlx_vlm.server", "--port", str(self.port)],
+            # --host 127.0.0.1: mlx_vlm.server defaults to 0.0.0.0, which would
+            # expose the inference server to the local network.
+            [str(VENV / "bin/python3"), "-m", "mlx_vlm.server", "--host", "127.0.0.1", "--port", str(self.port)],
             env={**os.environ, **OFFLINE_ENV},
             stdin=subprocess.DEVNULL,
             stdout=self.log_fh,
@@ -449,7 +461,10 @@ def run_doctor(cli: CliConfig) -> int:
     detail = f"127.0.0.1:{port} available" if available else f"127.0.0.1:{port} already in use"
     checks.append(_doctor_row(available, "port", detail))
 
-    return 0 if all(checks) else 1
+    if not all(checks):
+        print(f"{DIM}some checks failed — ./setup.sh repairs the venv and models; quench frees ports{RST}")
+        return 1
+    return 0
 
 
 def _is_cjk(ch: str) -> bool:
@@ -586,6 +601,28 @@ def read_path(arg: str, max_file_bytes: int) -> tuple[str, str, bool]:
     return str(path), text, truncated
 
 
+def read_user_input(prompt: str) -> str:
+    """input() plus paste support: a multi-line paste arrives as buffered extra
+    lines on the tty; drain them into one message instead of firing one model
+    turn per pasted line. Piped stdin is left untouched."""
+    line = input(prompt)
+    try:
+        if not sys.stdin.isatty():
+            return line
+    except (ValueError, OSError):
+        return line
+    lines = [line]
+    try:
+        while select.select([sys.stdin], [], [], 0)[0]:
+            extra = sys.stdin.readline()
+            if not extra:
+                break
+            lines.append(extra.rstrip("\n"))
+    except (OSError, ValueError):
+        pass
+    return "\n".join(lines)
+
+
 def print_help() -> None:
     print(f"{DIM}/read <path>  attach one file or directory for the next prompt")
     print("/drop         clear the pending attachment")
@@ -623,6 +660,7 @@ def _history_content(raw_text: str, thinking: bool, had_think_close: bool) -> tu
 def stream_response(resp, thinking: bool) -> StreamResult:
     raw_text = ""
     had_think_close = False
+    saw_done = False
     printed_count = 0
     if thinking:
         sys.stdout.write(THINK)
@@ -636,6 +674,7 @@ def stream_response(resp, thinking: bool) -> StreamResult:
                 continue
             chunk = line[5:].strip()
             if chunk == "[DONE]":
+                saw_done = True
                 break
             try:
                 token = json.loads(chunk)["choices"][0]["delta"].get("content", "")
@@ -680,9 +719,21 @@ def stream_response(resp, thinking: bool) -> StreamResult:
                 interrupted=True,
             )
         ) from exc
+    except Exception:
+        # Reset styling before propagating, or a thinking model's dim+italic
+        # mode leaks onto every later terminal line.
+        sys.stdout.write(RST + "\n")
+        sys.stdout.flush()
+        raise
 
     sys.stdout.write(RST + "\n")
     sys.stdout.flush()
+
+    if not saw_done:
+        # The server closed the stream without [DONE] — it died mid-answer with
+        # a clean TCP teardown. Without this, the partial text is silently
+        # recorded as a complete reply and the self-heal path never fires.
+        raise ConnectionError("stream ended before completion")
 
     if thinking and not had_think_close:
         print(f"{YEL}(no answer produced){RST}")
@@ -739,15 +790,37 @@ def session_path(model_size: str) -> Path:
 
 
 def save_history(path: Path, history: list[dict[str, str]]) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    payload = {
-        "version": 1,
-        "saved_at": time.time(),
-        "history": history,
-    }
-    tmp = path.with_suffix(".tmp")
-    tmp.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
-    tmp.replace(path)
+    # Best-effort: a failed save (disk full, permissions) must not kill the
+    # REPL after the answer already streamed successfully.
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        payload = {
+            "version": 1,
+            "saved_at": time.time(),
+            "history": history,
+        }
+        tmp = path.with_suffix(".tmp")
+        tmp.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
+        tmp.replace(path)
+    except OSError as exc:
+        print(f"{YEL}session save failed: {exc}{RST}")
+
+
+def prune_stale_sessions(directory: Path, max_age_seconds: int = RESTORE_MAX_AGE_SECONDS) -> None:
+    """Best-effort removal of session files too old to restore (and orphaned .tmp files)."""
+    now = time.time()
+    try:
+        entries = list(directory.iterdir())
+    except OSError:
+        return
+    for entry in entries:
+        if entry.suffix not in {".json", ".tmp"}:
+            continue
+        try:
+            if entry.is_file() and now - entry.stat().st_mtime > max_age_seconds:
+                entry.unlink()
+        except OSError:
+            continue
 
 
 def load_history(path: Path, max_age_seconds: int = RESTORE_MAX_AGE_SECONDS) -> list[dict[str, str]]:
@@ -778,18 +851,26 @@ def load_history(path: Path, max_age_seconds: int = RESTORE_MAX_AGE_SECONDS) -> 
 
 
 def run_chat(cli: CliConfig) -> int:
+    if not (VENV / "bin/python3").exists():
+        print(f"{RED}venv not found: {VENV}{RST}")
+        print(f"{DIM}run ./setup.sh to install, or set THREADSTONE_VENV{RST}")
+        return 1
     if not cli.model.path.exists():
         print(f"{RED}model not on disk: {cli.model.path}{RST}")
+        print(f"{DIM}run ./setup.sh to download models, or threadstone --doctor to inspect{RST}")
         return 1
 
     server = ServerManager(cli)
+    # Register before start() so the subprocess is reaped even when startup
+    # fails or is interrupted mid-wait.
+    atexit.register(server.stop)
     if not server.start():
         return 1
-    atexit.register(server.stop)
 
     history: list[dict[str, str]] = []
     attachment: tuple[str, str] | None = None
     restore_path = session_path(cli.model.size)
+    prune_stale_sessions(SESSION_DIR)
 
     clear_wait = f"\r{' ' * 50}\r" if server.printed_waiting else ""
     print(f"{clear_wait}{BOLD}threadstone {cli.model.size}{RST}  {DIM}{prompt_display(cli.sys_prompt)}{RST}\n")
@@ -811,7 +892,7 @@ def run_chat(cli: CliConfig) -> int:
         )
 
         try:
-            user = input(prompt).strip()
+            user = read_user_input(prompt).strip()
         except (EOFError, KeyboardInterrupt):
             print()
             break
@@ -891,51 +972,59 @@ def run_chat(cli: CliConfig) -> int:
         messages = build_messages(cli.sys_prompt, history)
 
         try:
-            response = server.chat(messages)
             try:
-                result = stream_response(response, cli.model.thinking)
-            finally:
-                response.close()
-            if result.history_text.strip():
-                append_assistant_message(history, result)
-            else:
-                history.append({"role": "assistant", "content": "(no answer produced)", "api_content": ""})
-            save_history(restore_path, history)
-            print()
-        except urllib.error.HTTPError as exc:
-            history.pop()
-            print(f"{RED}server {exc.code}: {exc.reason}{RST}")
-        except NETWORK_ERRORS as exc:
-            pending_user = history.pop()
-            if server.restart():
-                print(f"{DIM}reconnected, resending...{RST}")
-                history.append(pending_user)
-                messages = build_messages(cli.sys_prompt, history)
+                response = server.chat(messages)
                 try:
-                    response = server.chat(messages)
-                    try:
-                        result = stream_response(response, cli.model.thinking)
-                    finally:
-                        response.close()
+                    result = stream_response(response, cli.model.thinking)
+                finally:
+                    response.close()
+                if result.history_text.strip():
                     append_assistant_message(history, result)
-                    save_history(restore_path, history)
-                    print()
-                except StreamInterrupted as exc:
-                    append_assistant_message(history, exc.result)
-                    save_history(restore_path, history)
-                    print(f"{DIM}interrupted{RST}")
-                except urllib.error.HTTPError as retry_exc:
-                    history.pop()
-                    print(f"{RED}server {retry_exc.code}: {retry_exc.reason}{RST}")
-                except NETWORK_ERRORS as retry_exc:
-                    history.pop()
-                    print(f"{RED}retry failed: {retry_exc}{RST}")
-            else:
-                print(f"{RED}server restart failed: {exc}{RST}")
-        except StreamInterrupted as exc:
-            append_assistant_message(history, exc.result)
-            save_history(restore_path, history)
-            print(f"{DIM}interrupted{RST}")
+                else:
+                    history.append({"role": "assistant", "content": "(no answer produced)", "api_content": ""})
+                save_history(restore_path, history)
+                print()
+            except urllib.error.HTTPError as exc:
+                history.pop()
+                print(f"{RED}server {exc.code}: {exc.reason}{RST}")
+            except NETWORK_ERRORS as exc:
+                pending_user = history.pop()
+                if server.restart():
+                    print(f"{DIM}reconnected, resending...{RST}")
+                    history.append(pending_user)
+                    messages = build_messages(cli.sys_prompt, history)
+                    try:
+                        response = server.chat(messages)
+                        try:
+                            result = stream_response(response, cli.model.thinking)
+                        finally:
+                            response.close()
+                        append_assistant_message(history, result)
+                        save_history(restore_path, history)
+                        print()
+                    except StreamInterrupted as exc:
+                        append_assistant_message(history, exc.result)
+                        save_history(restore_path, history)
+                        print(f"{DIM}interrupted{RST}")
+                    except urllib.error.HTTPError as retry_exc:
+                        history.pop()
+                        print(f"{RED}server {retry_exc.code}: {retry_exc.reason}{RST}")
+                    except NETWORK_ERRORS as retry_exc:
+                        history.pop()
+                        print(f"{RED}retry failed: {retry_exc}{RST}")
+                else:
+                    print(f"{RED}server restart failed: {exc}{RST}")
+            except StreamInterrupted as exc:
+                append_assistant_message(history, exc.result)
+                save_history(restore_path, history)
+                print(f"{DIM}interrupted{RST}")
+        except KeyboardInterrupt:
+            # Ctrl-C outside the streaming loop: while the request is in flight
+            # (model still loading), during restart, or during the retry send.
+            # Drop the unanswered user turn and keep the REPL alive.
+            if history and history[-1]["role"] == "user":
+                history.pop()
+            print(f"\n{DIM}cancelled{RST}")
 
     return 0
 
@@ -947,7 +1036,13 @@ def main(argv: list[str] | None = None) -> int:
         return 0
     if cli.command == "doctor":
         return run_doctor(cli)
-    return run_chat(cli)
+    try:
+        return run_chat(cli)
+    except KeyboardInterrupt:
+        # Ctrl-C outside the chat loop (e.g. during startup wait): exit clean,
+        # atexit stops the server.
+        print(f"{RST}")
+        return 130
 
 
 if __name__ == "__main__":

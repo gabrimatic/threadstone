@@ -44,3 +44,4 @@ htmlcov/
 
 # Project scratch
 temp/
+.reviews/

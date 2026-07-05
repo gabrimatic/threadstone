@@ -109,18 +109,21 @@ TEMPERATURE = 0.7   # 0.0 = deterministic, 1.0 = creative
 REQ_TIMEOUT = 300   # seconds - max wait for a response
 
 # -- server -------------------------------------------------------------------
-SERVER_WAIT  = 20   # seconds - wait for server to become healthy on startup
-RESTART_WAIT = 25   # seconds - wait after auto-restart on crash
+# Health checks poll once per second and return as soon as the server is up,
+# so a generous cap only affects genuinely broken startups. Cold starts easily
+# exceed 20s on a loaded machine.
+SERVER_WAIT  = 45   # seconds - wait for server to become healthy on startup
+RESTART_WAIT = 45   # seconds - wait after auto-restart on crash
 
 # -- /read attachment ---------------------------------------------------------
 MAX_FILE_BYTES = 51200  # 50 KB cap - larger files are truncated
 
 # -- validation ---------------------------------------------------------------
 def validate():
+    # Deliberately does NOT require VENV to exist: this runs at import time,
+    # and a missing venv must not break --version/--help/--doctor on a fresh
+    # install. Runtime paths that need the venv check for it themselves.
     errors = []
-
-    if not VENV.exists():
-        errors.append(f"VENV does not exist: {VENV}")
 
     if REQ_TIMEOUT <= 0:
         errors.append(f"REQ_TIMEOUT must be positive, got {REQ_TIMEOUT}")

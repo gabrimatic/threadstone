@@ -23,16 +23,21 @@ jobs:
         with:
           python-version: ${{ matrix.python-version }}
 
-      - name: Create dummy venv for config validation
-        run: python3 -m venv ~/mlx-env
-
       - name: Install package
         run: python3 -m pip install -e .
 
+      # No ~/mlx-env exists on the runner. This proves a fresh pip install can
+      # run the CLI before setup.sh was ever executed, and that --doctor
+      # reports the missing venv gracefully (exit 1) instead of crashing.
       - name: CLI smoke test
         run: |
           threadstone --version
           threadstone --list-models
+          set +e
+          threadstone --doctor --all-models
+          code=$?
+          set -e
+          test "$code" -eq 1
 
       - name: Unit tests
         run: python3 -m unittest discover -s tests -t . -v

@@ -4,6 +4,28 @@ This changelog tracks notable Threadstone changes.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [1.2.0] - 2026-07-06
+
+### Fixed
+
+- A fresh `pip install threadstone` crashed every command — including `--version` and `--doctor` — with a config traceback when `~/mlx-env` did not exist, because the venv check ran at import time. The CLI now runs without the venv; chat and doctor report the missing venv with a `./setup.sh` hint instead. CI no longer creates a dummy venv, so this path stays tested.
+- The inference server is now spawned with `--host 127.0.0.1`. `mlx_vlm.server` defaults to `0.0.0.0`, which exposed the local model server to the network; the shell `forge` helper pins loopback too.
+- Ctrl-C while a request was in flight (model loading, server restarting, or resend) crashed the session with a raw traceback. It now cancels the turn and keeps the chat alive.
+- A server crash with a clean TCP teardown mid-answer was silently recorded as a complete reply. A stream that ends without `[DONE]` now triggers the same restart-and-resend recovery as a dropped connection.
+- A server that failed its startup health check was left running in the background, holding the model in memory. Failed startups now stop the spawned process, and cleanup is registered before startup so interrupts cannot leak it either.
+- Thinking-model dim+italic styling leaked onto subsequent terminal output when a stream died mid-reasoning; styling is now reset on every error path.
+- A failed session save (disk full, permissions) crashed the REPL after the answer had already streamed; it now warns and continues.
+- Multi-line pastes were split into one model turn per line; pasted lines are now joined into a single message.
+- The RAM guard ignored another instance of the same model running on its default port; it now excludes only the port it is about to bind.
+- Ignore null stream content deltas (previously merged as #4, listed here for the release record).
+- `setup.sh` wrote shell helpers to `~/.bashrc` for bash users, which macOS login shells never read; it now targets `~/.bash_profile`.
+
+### Changed
+
+- Startup and restart health windows widened from 20s/25s to 45s. Checks poll once per second and return as soon as the server is healthy, so only genuinely broken startups wait longer; cold starts on a loaded machine no longer fail spuriously.
+- Session files older than the 24-hour restore window are pruned from `~/.cache/threadstone/` at chat startup.
+- `--doctor` prints a repair hint when any check fails.
+
 ## [1.1.0] - 2026-05-13
 
 ### Added

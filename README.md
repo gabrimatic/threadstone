@@ -111,6 +111,7 @@ Threadstone owns the server lifecycle for normal chat.
 - **Port recovery**: if the default port is busy, Threadstone scans forward and starts the model on the next available localhost port.
 - **RAM guard**: startup checks free and reclaimable memory before launching a model, including other reachable model servers.
 - **Crash recovery**: if the server disappears during a turn, Threadstone restarts it and resends the pending message.
+- **Interrupt safety**: Ctrl-C mid-answer keeps the partial output; Ctrl-C while a request is in flight cancels the turn. The chat survives both.
 - **Thinking models**: reasoning streams dimmed until `</think>`, then the final answer prints normally and only the final answer is sent back in later history.
 - **Attachments**: `/read` accepts text files and directory listings, rejects non-regular files, rejects binary-looking content, and caps file payloads at 50 KB.
 - **Context trimming**: old turns are trimmed when the approximate context crosses the configured threshold while preserving valid role alternation.

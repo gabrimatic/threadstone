@@ -293,6 +293,35 @@ class TestStreamResponse(unittest.TestCase):
         self.assertEqual(ctx.exception.result.history_text, "partial")
         self.assertEqual(ctx.exception.result.api_text, "partial")
 
+    def test_stream_ending_without_done_raises(self):
+        # A clean TCP teardown after a server crash ends the iterator without
+        # [DONE]; treating that as success would record a truncated answer.
+        buf = io.StringIO()
+        with patch("sys.stdout", buf):
+            with self.assertRaises(ConnectionError):
+                ts.stream_response(_sse("partial", done=False), thinking=False)
+
+    def test_stream_ending_without_done_resets_ansi(self):
+        buf = io.StringIO()
+        with patch("sys.stdout", buf):
+            with self.assertRaises(ConnectionError):
+                ts.stream_response(_sse("reasoning", done=False), thinking=True)
+        self.assertIn(ts.RST, buf.getvalue())
+
+    def test_mid_stream_error_resets_ansi_before_propagating(self):
+        class CrashingResponse:
+            def __iter__(self):
+                yield _sse("reasoning", done=False)[0]
+                raise ConnectionResetError("server died")
+
+        buf = io.StringIO()
+        with patch("sys.stdout", buf):
+            with self.assertRaises(ConnectionResetError):
+                ts.stream_response(CrashingResponse(), thinking=True)
+        out = buf.getvalue()
+        self.assertIn(ts.THINK, out)
+        self.assertIn(ts.RST, out, "dim+italic must be reset when the stream dies")
+
 
 class TestRuntimeChecks(unittest.TestCase):
     def test_mlx_server_import_check_allows_slow_cold_import(self):
@@ -327,6 +356,164 @@ class TestAppendAssistantMessage(unittest.TestCase):
         self.assertEqual(history[0]["api_content"], "")
 
 
+class TestServerManager(unittest.TestCase):
+    def _cli(self):
+        return ts.parse_args(["threadstone.py", "0.8B"])
+
+    def test_spawn_binds_localhost(self):
+        # mlx_vlm.server defaults to 0.0.0.0; the spawn must pin loopback.
+        manager = ts.ServerManager(self._cli())
+        manager.port = 8083
+        with patch("threadstone.subprocess.Popen") as popen:
+            manager._spawn()
+        args = popen.call_args.args[0]
+        self.assertIn("--host", args)
+        self.assertEqual(args[args.index("--host") + 1], "127.0.0.1")
+        manager.proc = None
+        manager.stop()
+
+    def test_failed_health_wait_stops_spawned_server(self):
+        # A server that never turns healthy must not outlive start().
+        manager = ts.ServerManager(self._cli())
+        with patch("threadstone._vm_stat_available_gb", return_value=None), \
+             patch.object(ts.ServerManager, "_find_available_port", return_value=8083), \
+             patch.object(manager, "_spawn"), \
+             patch.object(manager, "wait_for_health", return_value=False), \
+             patch.object(manager, "_log_contains", return_value=False), \
+             patch.object(manager, "stop") as stop:
+            self.assertFalse(manager.start())
+        stop.assert_called()
+
+    def test_insufficient_ram_refuses_without_spawning(self):
+        manager = ts.ServerManager(self._cli())
+        buf = io.StringIO()
+        with patch("threadstone._vm_stat_available_gb", return_value=0.5), \
+             patch("threadstone._running_model_ram_gb", return_value=0.0), \
+             patch.object(ts.ServerManager, "_find_available_port", return_value=8083), \
+             patch.object(manager, "_spawn") as spawn, \
+             patch("sys.stdout", buf):
+            self.assertFalse(manager.start())
+        spawn.assert_not_called()
+        self.assertIn("insufficient RAM", buf.getvalue())
+
+    def test_ram_guard_counts_other_running_servers(self):
+        # The guard must exclude only the port it is about to bind, so another
+        # instance of the same model on the default port is counted.
+        manager = ts.ServerManager(self._cli())
+        buf = io.StringIO()
+        with patch("threadstone._vm_stat_available_gb", return_value=64.0), \
+             patch("threadstone._running_model_ram_gb", return_value=1.5) as running, \
+             patch.object(ts.ServerManager, "_find_available_port", return_value=8093), \
+             patch.object(manager, "_spawn"), \
+             patch.object(manager, "wait_for_health", return_value=True), \
+             patch("sys.stdout", buf):
+            self.assertTrue(manager.start())
+        running.assert_called_once_with(8093)
+        self.assertIn("other model servers", buf.getvalue())
+
+
+class _CancellingServer:
+    def __init__(self, cli):
+        self.cli = cli
+        self.printed_waiting = False
+
+    def start(self):
+        return True
+
+    def stop(self):
+        pass
+
+    def chat(self, messages):
+        raise KeyboardInterrupt
+
+
+class TestRunChatPreflight(unittest.TestCase):
+    def test_missing_venv_reports_setup_hint(self):
+        cli = ts.parse_args(["threadstone.py", "0.8B"])
+        buf = io.StringIO()
+        with patch.object(ts, "VENV", Path(tempfile.gettempdir()) / "threadstone-no-such-venv"), \
+             patch("sys.stdout", buf):
+            self.assertEqual(ts.run_chat(cli), 1)
+        out = buf.getvalue()
+        self.assertIn("venv not found", out)
+        self.assertIn("setup.sh", out)
+
+
+class TestRunChatCancel(unittest.TestCase):
+    def test_ctrl_c_during_request_cancels_turn_and_keeps_repl(self):
+        cli = ts.parse_args(["threadstone.py", "0.8B"])
+        answers = iter(["hi"])
+
+        def fake_input(prompt=""):
+            try:
+                return next(answers)
+            except StopIteration:
+                raise EOFError
+
+        buf = io.StringIO()
+        with tempfile.TemporaryDirectory() as tmp:
+            with patch.object(ts, "ServerManager", _CancellingServer), \
+                 patch.object(ts, "SESSION_DIR", Path(tmp)), \
+                 patch.object(ts, "session_path", lambda size: Path(tmp) / "s.json"), \
+                 patch("builtins.input", fake_input), \
+                 patch("pathlib.Path.exists", return_value=True), \
+                 patch("sys.stdout", buf):
+                exit_code = ts.run_chat(cli)
+        self.assertEqual(exit_code, 0)
+        self.assertIn("cancelled", buf.getvalue())
+
+
+class TestReadUserInput(unittest.TestCase):
+    def test_multiline_paste_joins_buffered_lines(self):
+        fake_stdin = unittest.mock.Mock()
+        fake_stdin.isatty.return_value = True
+        fake_stdin.readline.side_effect = ["line2\n", "line3\n"]
+        selects = iter([([fake_stdin], [], []), ([fake_stdin], [], []), ([], [], [])])
+        with patch("builtins.input", return_value="line1"), \
+             patch.object(ts.sys, "stdin", fake_stdin), \
+             patch.object(ts.select, "select", lambda *a: next(selects)):
+            self.assertEqual(ts.read_user_input("> "), "line1\nline2\nline3")
+
+    def test_piped_stdin_is_not_drained(self):
+        fake_stdin = unittest.mock.Mock()
+        fake_stdin.isatty.return_value = False
+        with patch("builtins.input", return_value="only"), \
+             patch.object(ts.sys, "stdin", fake_stdin):
+            self.assertEqual(ts.read_user_input("> "), "only")
+        fake_stdin.readline.assert_not_called()
+
+    def test_single_line_tty_input_passes_through(self):
+        fake_stdin = unittest.mock.Mock()
+        fake_stdin.isatty.return_value = True
+        with patch("builtins.input", return_value="hello"), \
+             patch.object(ts.sys, "stdin", fake_stdin), \
+             patch.object(ts.select, "select", lambda *a: ([], [], [])):
+            self.assertEqual(ts.read_user_input("> "), "hello")
+
+
+class TestPruneStaleSessions(unittest.TestCase):
+    def test_prunes_only_expired_session_files(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            directory = Path(tmp)
+            old_json = directory / "old.json"
+            old_tmp = directory / "old.tmp"
+            fresh = directory / "fresh.json"
+            other = directory / "keep.txt"
+            for path in (old_json, old_tmp, fresh, other):
+                path.write_text("{}")
+            past = time.time() - ts.RESTORE_MAX_AGE_SECONDS - 60
+            for path in (old_json, old_tmp, other):
+                os.utime(path, (past, past))
+            ts.prune_stale_sessions(directory)
+            self.assertFalse(old_json.exists())
+            self.assertFalse(old_tmp.exists())
+            self.assertTrue(fresh.exists())
+            self.assertTrue(other.exists(), "non-session files must be left alone")
+
+    def test_missing_directory_is_ignored(self):
+        ts.prune_stale_sessions(Path(tempfile.gettempdir()) / "threadstone-prune-does-not-exist")
+
+
 class TestSessionPersistence(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.mkdtemp()
@@ -336,6 +523,15 @@ class TestSessionPersistence(unittest.TestCase):
         import shutil
 
         shutil.rmtree(self.tmp, ignore_errors=True)
+
+    def test_save_failure_warns_instead_of_crashing(self):
+        # Disk-full/permission errors after a successful answer must not kill
+        # the REPL.
+        buf = io.StringIO()
+        with patch("sys.stdout", buf), \
+             patch.object(Path, "mkdir", side_effect=PermissionError("denied")):
+            ts.save_history(self.path, [])
+        self.assertIn("session save failed", buf.getvalue())
 
     def test_save_and_load_history(self):
         history = [
@@ -368,6 +564,12 @@ class TestConfigValidate(unittest.TestCase):
 
     def test_baseline_passes(self):
         cfg.validate()
+
+    def test_validate_does_not_require_venv(self):
+        # validate() runs at import time; a missing venv must not break
+        # --version/--help/--doctor on a machine that never ran setup.sh.
+        with patch.object(cfg, "VENV", Path(tempfile.gettempdir()) / "threadstone-no-such-venv"):
+            cfg.validate()
 
     def test_missing_model_field_raises(self):
         del cfg.MODELS["9B"]["port"]

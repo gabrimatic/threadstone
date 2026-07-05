@@ -43,7 +43,9 @@ _shell_rc() {
   sh="$(dscl . -read "/Users/$USER" UserShell 2>/dev/null | awk '{print $2}')"
   case "${sh##*/}" in
     zsh)  echo "${HOME}/.zshrc" ;;
-    bash) echo "${HOME}/.bashrc" ;;
+    # macOS terminals start login shells; login bash reads .bash_profile and
+    # ignores .bashrc unless the user wired it up themselves.
+    bash) echo "${HOME}/.bash_profile" ;;
     *)
       warn "shell '${sh##*/}' is not zsh or bash; writing aliases to ~/.zshrc anyway"
       echo "${HOME}/.zshrc"
@@ -256,7 +258,7 @@ forge() {
   source "${VENV}/bin/activate"
   _stop_port "\$port" && echo "stopped previous \$size server"
   env \$(_offline_env) \\
-    python3 -m mlx_vlm.server --port \$port </dev/null >/dev/null 2>&1 &
+    python3 -m mlx_vlm.server --host 127.0.0.1 --port \$port </dev/null >/dev/null 2>&1 &
   disown
   echo "\$size on :\$port"
 }
