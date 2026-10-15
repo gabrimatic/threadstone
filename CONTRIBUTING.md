@@ -27,7 +27,7 @@ threadstone --doctor --all-models
 Threadstone is intentionally small.
 
 ```text
-threadstone.py
+threadstone/__init__.py
 ├── CLI parsing and diagnostics
 ├── ServerManager for mlx_vlm.server lifecycle
 ├── streaming SSE parser
@@ -36,7 +36,7 @@ threadstone.py
 ├── history trimming
 └── restore-file persistence
 
-config.py
+threadstone/config.py
 ├── offline environment flags
 ├── model registry
 ├── Hugging Face snapshot lookup
@@ -47,7 +47,7 @@ The client uses the Python standard library. Runtime ML dependencies live in `~/
 
 ## Adding a Model
 
-1. Add the model entry to `MODELS` in `config.py`.
+1. Add the model entry to `MODELS` in `threadstone/config.py`.
 2. Add its default port to `_forge_port()` in `setup.sh`.
 3. Add the Hugging Face repo to `MODELS_LIST` in `setup.sh`.
 4. Update the model table in `README.md`.

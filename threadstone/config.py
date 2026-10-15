@@ -1,5 +1,5 @@
 # oracle config - all settings live here
-# Edit this file to change anything. threadstone.py is just the engine.
+# Edit this file to change anything. threadstone/__init__.py is just the engine.
 import os
 from pathlib import Path
 from typing import Any

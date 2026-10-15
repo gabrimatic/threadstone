@@ -104,7 +104,7 @@ Default models are 4-bit MLX snapshots from `mlx-community`.
 | `2B` | Qwen3.5-2B-MLX-4bit | No | 2048 | 4000 |
 | `0.8B` | Qwen3.5-0.8B-MLX-4bit | No | 1024 | 2000 |
 
-Each model has its own default port, memory estimate, context threshold, and response budget in `config.py`.
+Each model has its own default port, memory estimate, context threshold, and response budget in `threadstone/config.py`.
 
 ## Behavior
 
@@ -124,13 +124,13 @@ Threadstone owns the server lifecycle for normal chat.
 oracle / threadstone
     |
     v
-threadstone.py
+threadstone/__init__.py
     |-- argument parsing, doctor, REPL, streaming, history
     |-- ServerManager starts and monitors mlx_vlm.server
     |-- /read attaches bounded local text context
     |
     v
-config.py
+threadstone/config.py
     |-- model registry, ports, limits, memory estimates
     |-- snapshot resolution from the Hugging Face cache
     |-- offline environment guard
@@ -140,8 +140,8 @@ Files:
 
 | File | Role |
 |------|------|
-| `threadstone.py` | CLI, server lifecycle, chat loop, streaming parser, attachment handling |
-| `config.py` | Model registry, offline env, runtime limits, validation |
+| `threadstone/__init__.py` | CLI, server lifecycle, chat loop, streaming parser, attachment handling |
+| `threadstone/config.py` | Model registry, offline env, runtime limits, validation |
 | `setup.sh` | One-time macOS installer and shell helper setup |
 | `tests/` | Unit coverage for parsing, streaming, history, config, attachments, and snapshots |
 
@@ -177,7 +177,7 @@ Threadstone is a Python package, so the package registry is **PyPI**, not pub.de
 
 Release path:
 
-1. Bump the version in `pyproject.toml` and `VERSION` in `threadstone.py`, and add a `CHANGELOG.md` entry.
+1. Bump the version in `pyproject.toml` and `VERSION` in `threadstone/__init__.py`, and add a `CHANGELOG.md` entry.
 2. Push to `main` and wait for CI to pass.
 3. Publish a GitHub release with a `vX.Y.Z` tag that matches the package version.
 4. The release workflow reruns CI on the tagged commit, checks the tag against the package version, builds the sdist and wheel, and publishes to PyPI through Trusted Publishing.

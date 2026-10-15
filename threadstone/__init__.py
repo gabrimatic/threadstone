@@ -25,9 +25,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import TextIO
 
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 try:
-    from config import (
+    from .config import (
         MAX_FILE_BYTES,
         MODELS,
         OFFLINE_ENV,
@@ -42,7 +41,7 @@ except ValueError as exc:
     print(f"config error: {exc}", file=sys.stderr)
     raise SystemExit(2) from None
 
-VERSION = "1.2.1"
+VERSION = "1.2.2"
 DIM = "\033[2m"
 CYAN = "\033[36m"
 RED = "\033[31m"

@@ -10,8 +10,8 @@ from copy import deepcopy
 from pathlib import Path
 from unittest.mock import patch
 
-import config as cfg
 import threadstone as ts
+from threadstone import config as cfg
 
 
 def _sse(*tokens, done=True):

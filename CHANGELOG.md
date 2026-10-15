@@ -4,10 +4,11 @@ This changelog tracks notable Threadstone changes.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
-## [Unreleased]
+## [1.2.2] - 2026-10-15
 
 ### Fixed
 
+- Modules now live under the `threadstone` package; nothing else is installed at top level. 1.2.1 installed a top-level `config` module into site-packages, which could shadow or be shadowed by any other `config` module. The `threadstone` and `oracle` commands are unchanged. In a clone, model settings now live in `threadstone/config.py`; move any local edits from the old `config.py` there. An existing clone install needs `./setup.sh` (or `pip install -e .`) once after pulling so the editable install picks up the package. The venv, session restore and model cache locations are unchanged.
 - The release workflow runs the full CI suite on the tagged commit before it builds and publishes; 1.2.1 had dropped the test run from the release path.
 - The sdist ships `tests/__init__.py`, so the documented test command works from an unpacked sdist.
 - `setup.sh` stops on macOS older than 14, where current MLX has no wheels and pip would fall back to releases too old for the configured models. The README states the macOS 14 requirement.
@@ -17,6 +18,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 - The build backend requirement is back to setuptools 77 or newer, the version that added the license metadata Threadstone uses; 84 was never needed.
 - Package metadata names the author.
+- The wheel ships `py.typed`, matching its `Typing :: Typed` classifier.
 
 ## [1.2.1] - 2026-10-15
 

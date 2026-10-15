@@ -277,7 +277,7 @@ quench() {
 }
 
 # oracle [system_prompt] [size]
-# threadstone.py owns argument parsing and per-instance server lifecycle.
+# The threadstone CLI owns argument parsing and per-instance server lifecycle.
 oracle() {
   source "${VENV}/bin/activate"
   env \$(_offline_env) threadstone "\$@"
