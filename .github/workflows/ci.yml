@@ -3,23 +3,74 @@ name: CI
 on:
   push:
     branches: [main]
+    paths-ignore:
+      - "CHANGELOG.md"
+      - "CONTRIBUTING.md"
+      - "SECURITY.md"
+      - "LICENSE"
+      - ".github/ISSUE_TEMPLATE/**"
+      - ".github/PULL_REQUEST_TEMPLATE.md"
+      - ".github/CODEOWNERS"
+      - ".github/FUNDING.yml"
+      - ".github/dependabot.yml"
   pull_request:
     branches: [main]
+    paths-ignore:
+      - "CHANGELOG.md"
+      - "CONTRIBUTING.md"
+      - "SECURITY.md"
+      - "LICENSE"
+      - ".github/ISSUE_TEMPLATE/**"
+      - ".github/PULL_REQUEST_TEMPLATE.md"
+      - ".github/CODEOWNERS"
+      - ".github/FUNDING.yml"
+      - ".github/dependabot.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
-  python-checks:
+  lint:
+    name: Lint and type check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Set up Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.13"
+
+      - name: Install tools
+        run: python3 -m pip install ruff mypy
+
+      - name: Ruff
+        run: ruff check --output-format=github .
+
+      - name: Mypy
+        run: mypy
+
+      - name: Setup script syntax
+        run: bash -n setup.sh
+
+  test:
     name: Python ${{ matrix.python-version }}
-    runs-on: macos-15
+    runs-on: ubuntu-latest
     strategy:
       fail-fast: false
       matrix:
-        python-version: ["3.13", "3.14"]
-
+        # Oldest supported and newest stable.
+        python-version: ["3.13", "3.15"]
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Set up Python
-        uses: actions/setup-python@v6
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
           python-version: ${{ matrix.python-version }}
 
@@ -42,17 +93,14 @@ jobs:
       - name: Unit tests
         run: python3 -m unittest discover -s tests -t . -v
 
-      - name: Compile sources
-        run: python3 -m compileall config.py threadstone.py tests
-
   package:
     name: Package build
-    runs-on: macos-15
+    runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Set up Python
-        uses: actions/setup-python@v6
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
           python-version: "3.13"
 
@@ -63,13 +111,4 @@ jobs:
         run: python3 -m build --sdist --wheel
 
       - name: Check distributions
-        run: python3 -m twine check dist/*
-
-  setup-check:
-    name: Setup script syntax
-    runs-on: macos-15
-    steps:
-      - uses: actions/checkout@v7
-
-      - name: Syntax check
-        run: bash -n setup.sh
+        run: python3 -m twine check --strict dist/*
