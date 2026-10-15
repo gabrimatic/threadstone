@@ -42,7 +42,7 @@ except ValueError as exc:
     print(f"config error: {exc}", file=sys.stderr)
     raise SystemExit(2) from None
 
-VERSION = "1.2.0"
+VERSION = "1.2.1"
 DIM = "\033[2m"
 CYAN = "\033[36m"
 RED = "\033[31m"

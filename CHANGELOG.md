@@ -4,6 +4,18 @@ This changelog tracks notable Threadstone changes.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [1.2.1] - 2026-10-15
+
+First release published to PyPI. 1.2.0 was tagged on GitHub but never reached PyPI.
+
+### Changed
+
+- Declared Python 3.15 support; CI tests the oldest (3.13) and newest (3.15) supported versions.
+- The build backend now requires setuptools 84 or newer.
+- Added ruff and mypy configuration and a lint job; the `dev` extra installs both.
+- CI and release builds run on Linux runners, cancel superseded runs, and skip doc-only changes. Actions are pinned to release SHAs and Dependabot groups updates into one monthly PR per ecosystem.
+- The release workflow refuses to publish when the release tag does not match the package version.
+
 ## [1.2.0] - 2026-07-06
 
 ### Fixed
