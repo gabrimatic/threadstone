@@ -149,9 +149,11 @@ Files:
 python3 -m venv .venv
 source .venv/bin/activate
 pip install -e ".[dev]"
+ruff check .
+mypy
 python3 -m unittest discover -s tests -t . -v
 python3 -m build --sdist --wheel
-python3 -m twine check dist/*
+python3 -m twine check --strict dist/*
 ```
 
 Run the CLI without starting a model:
@@ -173,10 +175,10 @@ Threadstone is a Python package, so the package registry is **PyPI**, not pub.de
 
 Release path:
 
-1. Update `CHANGELOG.md` and `pyproject.toml`.
-2. Run tests, build, and `twine check`.
-3. Create a GitHub release tag such as `v1.1.0`.
-4. The release workflow builds the sdist and wheel, then publishes to PyPI through Trusted Publishing.
+1. Bump the version in `pyproject.toml` and `VERSION` in `threadstone.py`, and add a `CHANGELOG.md` entry.
+2. Push to `main` and wait for CI to pass.
+3. Publish a GitHub release with a `vX.Y.Z` tag that matches the package version.
+4. The release workflow checks the tag against the package version, builds the sdist and wheel, and publishes to PyPI through Trusted Publishing.
 
 PyPI Trusted Publishing must be configured for:
 

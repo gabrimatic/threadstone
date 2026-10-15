@@ -1,5 +1,5 @@
 [build-system]
-requires = ["setuptools>=77"]
+requires = ["setuptools>=84"]
 build-backend = "setuptools.build_meta"
 
 [project]
@@ -18,6 +18,7 @@ classifiers = [
     "Operating System :: MacOS :: MacOS X",
     "Programming Language :: Python :: 3.13",
     "Programming Language :: Python :: 3.14",
+    "Programming Language :: Python :: 3.15",
     "Programming Language :: Python :: 3 :: Only",
     "Topic :: Terminals",
     "Typing :: Typed",
@@ -31,6 +32,8 @@ runtime = [
 ]
 dev = [
     "build",
+    "mypy",
+    "ruff",
     "twine",
 ]
 
@@ -47,3 +50,18 @@ Security = "https://github.com/gabrimatic/threadstone/security/advisories/new"
 
 [tool.setuptools]
 py-modules = ["threadstone", "config"]
+
+[tool.ruff]
+target-version = "py313"
+line-length = 120
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "UP", "B", "SIM", "RUF"]
+# Terminal glyphs (› ×) are intentional.
+ignore = ["RUF001", "RUF003"]
+
+[tool.mypy]
+python_version = "3.13"
+files = ["config.py", "threadstone.py"]
+check_untyped_defs = true
+warn_unused_ignores = true

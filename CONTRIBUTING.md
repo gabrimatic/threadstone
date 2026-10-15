@@ -58,11 +58,12 @@ Keep model defaults explicit: port, thinking mode, `max_tokens`, context warn/tr
 ## Testing
 
 ```bash
+ruff check .
+mypy
 python3 -m unittest discover -s tests -t . -v
-python3 -m compileall config.py threadstone.py tests
 bash -n setup.sh
 python3 -m build --sdist --wheel
-python3 -m twine check dist/*
+python3 -m twine check --strict dist/*
 ```
 
 Manual runtime checks after setup:

@@ -1,13 +1,12 @@
 import io
 import json
 import os
-import stat
 import subprocess
 import tempfile
 import time
 import unittest
-from copy import deepcopy
 from contextlib import redirect_stderr
+from copy import deepcopy
 from pathlib import Path
 from unittest.mock import patch
 
@@ -45,17 +44,15 @@ class TestParseArgs(unittest.TestCase):
 
     def test_invalid_forge_port_exits(self):
         buf = io.StringIO()
-        with patch("sys.stdout", buf):
-            with self.assertRaises(SystemExit):
-                ts.parse_args(["threadstone.py"], env={"FORGE_PORT": "abc"})
+        with patch("sys.stdout", buf), self.assertRaises(SystemExit):
+            ts.parse_args(["threadstone.py"], env={"FORGE_PORT": "abc"})
         self.assertIn("is not a valid integer", buf.getvalue())
 
     def test_forge_port_out_of_range_exits(self):
         for bad in ("-1", "0", "65536", "99999"):
             buf = io.StringIO()
-            with patch("sys.stdout", buf):
-                with self.assertRaises(SystemExit):
-                    ts.parse_args(["threadstone.py"], env={"FORGE_PORT": bad})
+            with patch("sys.stdout", buf), self.assertRaises(SystemExit):
+                ts.parse_args(["threadstone.py"], env={"FORGE_PORT": bad})
             self.assertIn("must be 1-65535", buf.getvalue())
 
     def test_forge_port_boundary_values_accepted(self):
@@ -80,9 +77,8 @@ class TestParseArgs(unittest.TestCase):
         self.assertEqual(cli.model.size, "2B")
 
     def test_invalid_cli_port_exits(self):
-        with redirect_stderr(io.StringIO()):
-            with self.assertRaises(SystemExit):
-                ts.parse_args(["threadstone.py", "--port", "65536"])
+        with redirect_stderr(io.StringIO()), self.assertRaises(SystemExit):
+            ts.parse_args(["threadstone.py", "--port", "65536"])
 
 
 class TestTokenEst(unittest.TestCase):
@@ -104,7 +100,7 @@ class TestTrimHistory(unittest.TestCase):
         return [{"role": r, "content": r} for r in roles]
 
     def test_trim_preserves_system(self):
-        history = [{"role": "system", "content": "sys"}] + self._turns("user", "assistant", "user")
+        history = [{"role": "system", "content": "sys"}, *self._turns("user", "assistant", "user")]
         result = ts.trim_history(history, keep=2)
         self.assertEqual(result[0]["role"], "system")
 
@@ -287,9 +283,8 @@ class TestStreamResponse(unittest.TestCase):
                 raise KeyboardInterrupt
 
         buf = io.StringIO()
-        with patch("sys.stdout", buf):
-            with self.assertRaises(ts.StreamInterrupted) as ctx:
-                ts.stream_response(InterruptingResponse(), thinking=False)
+        with patch("sys.stdout", buf), self.assertRaises(ts.StreamInterrupted) as ctx:
+            ts.stream_response(InterruptingResponse(), thinking=False)
         self.assertEqual(ctx.exception.result.history_text, "partial")
         self.assertEqual(ctx.exception.result.api_text, "partial")
 
@@ -297,15 +292,13 @@ class TestStreamResponse(unittest.TestCase):
         # A clean TCP teardown after a server crash ends the iterator without
         # [DONE]; treating that as success would record a truncated answer.
         buf = io.StringIO()
-        with patch("sys.stdout", buf):
-            with self.assertRaises(ConnectionError):
-                ts.stream_response(_sse("partial", done=False), thinking=False)
+        with patch("sys.stdout", buf), self.assertRaises(ConnectionError):
+            ts.stream_response(_sse("partial", done=False), thinking=False)
 
     def test_stream_ending_without_done_resets_ansi(self):
         buf = io.StringIO()
-        with patch("sys.stdout", buf):
-            with self.assertRaises(ConnectionError):
-                ts.stream_response(_sse("reasoning", done=False), thinking=True)
+        with patch("sys.stdout", buf), self.assertRaises(ConnectionError):
+            ts.stream_response(_sse("reasoning", done=False), thinking=True)
         self.assertIn(ts.RST, buf.getvalue())
 
     def test_mid_stream_error_resets_ansi_before_propagating(self):
@@ -315,9 +308,8 @@ class TestStreamResponse(unittest.TestCase):
                 raise ConnectionResetError("server died")
 
         buf = io.StringIO()
-        with patch("sys.stdout", buf):
-            with self.assertRaises(ConnectionResetError):
-                ts.stream_response(CrashingResponse(), thinking=True)
+        with patch("sys.stdout", buf), self.assertRaises(ConnectionResetError):
+            ts.stream_response(CrashingResponse(), thinking=True)
         out = buf.getvalue()
         self.assertIn(ts.THINK, out)
         self.assertIn(ts.RST, out, "dim+italic must be reset when the stream dies")
@@ -332,9 +324,11 @@ class TestRuntimeChecks(unittest.TestCase):
             python.chmod(0o755)
             completed = subprocess.CompletedProcess(args=[str(python)], returncode=0)
 
-            with patch.object(ts, "VENV", Path(tmp)):
-                with patch("threadstone.subprocess.run", return_value=completed) as run:
-                    self.assertTrue(ts._venv_has_mlx_server())
+            with (
+                patch.object(ts, "VENV", Path(tmp)),
+                patch("threadstone.subprocess.run", return_value=completed) as run,
+            ):
+                self.assertTrue(ts._venv_has_mlx_server())
 
             self.assertGreaterEqual(run.call_args.kwargs["timeout"], 30)
 
@@ -448,17 +442,16 @@ class TestRunChatCancel(unittest.TestCase):
             try:
                 return next(answers)
             except StopIteration:
-                raise EOFError
+                raise EOFError from None
 
         buf = io.StringIO()
-        with tempfile.TemporaryDirectory() as tmp:
-            with patch.object(ts, "ServerManager", _CancellingServer), \
+        with tempfile.TemporaryDirectory() as tmp, patch.object(ts, "ServerManager", _CancellingServer), \
                  patch.object(ts, "SESSION_DIR", Path(tmp)), \
                  patch.object(ts, "session_path", lambda size: Path(tmp) / "s.json"), \
                  patch("builtins.input", fake_input), \
                  patch("pathlib.Path.exists", return_value=True), \
                  patch("sys.stdout", buf):
-                exit_code = ts.run_chat(cli)
+            exit_code = ts.run_chat(cli)
         self.assertEqual(exit_code, 0)
         self.assertIn("cancelled", buf.getvalue())
 

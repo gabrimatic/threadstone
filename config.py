@@ -2,6 +2,7 @@
 # Edit this file to change anything. threadstone.py is just the engine.
 import os
 from pathlib import Path
+from typing import Any
 
 # -- offline guard - applied immediately so the main process is also covered ---
 # Subprocesses inherit os.environ, so setting here covers everything.
@@ -62,7 +63,7 @@ def _snapshot(repo: str, fallback_hash: str) -> Path:
 # Add a new model here and one entry in _forge_port() in setup.sh.
 # ram_gb: approximate peak unified memory usage (model weights + MLX overhead).
 # Used for the pre-launch memory guard.
-MODELS: dict[str, dict[str, object]] = {
+MODELS: dict[str, dict[str, Any]] = {
     "9B": {
         "path": _snapshot("models--mlx-community--Qwen3.5-9B-MLX-4bit", "d0b3cb793b1b12acf826571ae1bb2bc819a7a37f"),
         "port": 8080,
@@ -151,16 +152,23 @@ def validate():
                 errors.append(f"MODELS[{key!r}] is missing {field!r}")
                 continue
             if not isinstance(model[field], field_type):
-                errors.append(f"MODELS[{key!r}][{field!r}] must be {field_type.__name__ if isinstance(field_type, type) else ' or '.join(t.__name__ for t in field_type)}")
+                if isinstance(field_type, type):
+                    expected = field_type.__name__
+                else:
+                    expected = " or ".join(t.__name__ for t in field_type)
+                errors.append(f"MODELS[{key!r}][{field!r}] must be {expected}")
         if isinstance(model.get("max_tokens"), int) and model["max_tokens"] <= 0:
             errors.append(f"MODELS[{key!r}]['max_tokens'] must be positive")
         if isinstance(model.get("ctx_keep"), int) and model["ctx_keep"] <= 0:
             errors.append(f"MODELS[{key!r}]['ctx_keep'] must be positive")
         if isinstance(model.get("ctx_warn"), int) and model["ctx_warn"] < 0:
             errors.append(f"MODELS[{key!r}]['ctx_warn'] must be non-negative")
-        if isinstance(model.get("ctx_trim"), int) and isinstance(model.get("ctx_warn"), int):
-            if model["ctx_trim"] <= model["ctx_warn"]:
-                errors.append(f"MODELS[{key!r}]['ctx_trim'] must be greater than 'ctx_warn'")
+        if (
+            isinstance(model.get("ctx_trim"), int)
+            and isinstance(model.get("ctx_warn"), int)
+            and model["ctx_trim"] <= model["ctx_warn"]
+        ):
+            errors.append(f"MODELS[{key!r}]['ctx_trim'] must be greater than 'ctx_warn'")
         if isinstance(model.get("ram_gb"), (int, float)) and model["ram_gb"] <= 0:
             errors.append(f"MODELS[{key!r}]['ram_gb'] must be positive")
 

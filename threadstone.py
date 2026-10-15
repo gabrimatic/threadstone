@@ -3,13 +3,14 @@
 
 from __future__ import annotations
 
-import atexit
 import argparse
+import atexit
+import contextlib
 import errno
 import hashlib
 import json
-import platform
 import os
+import platform
 import re
 import select
 import socket
@@ -19,15 +20,27 @@ import tempfile
 import time
 import urllib.error
 import urllib.request
+from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
+from typing import TextIO
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 try:
-    from config import MAX_FILE_BYTES, MODELS, OFFLINE_ENV, REQ_TIMEOUT, RESTART_WAIT, SERVER_WAIT, SESSION_DIR, TEMPERATURE, VENV
+    from config import (
+        MAX_FILE_BYTES,
+        MODELS,
+        OFFLINE_ENV,
+        REQ_TIMEOUT,
+        RESTART_WAIT,
+        SERVER_WAIT,
+        SESSION_DIR,
+        TEMPERATURE,
+        VENV,
+    )
 except ValueError as exc:
     print(f"config error: {exc}", file=sys.stderr)
-    raise SystemExit(2)
+    raise SystemExit(2) from None
 
 VERSION = "1.2.0"
 DIM = "\033[2m"
@@ -146,7 +159,7 @@ class ServerManager:
         self.server = ""
         self.proc: subprocess.Popen | None = None
         self.log_path = Path(tempfile.gettempdir()) / f"threadstone-server-{os.getpid()}.log"
-        self.log_fh = None
+        self.log_fh: TextIO | None = None
         self.printed_waiting = False
 
     def start(self) -> bool:
@@ -212,10 +225,8 @@ class ServerManager:
                     pass
             self.proc = None
         if self.log_fh is not None:
-            try:
+            with contextlib.suppress(OSError):
                 self.log_fh.close()
-            except OSError:
-                pass
             self.log_fh = None
 
     def restart(self) -> bool:
@@ -268,7 +279,7 @@ class ServerManager:
 
     def _spawn(self) -> None:
         self.stop()
-        self.log_fh = open(self.log_path, "w", encoding="utf-8")
+        self.log_fh = open(self.log_path, "w", encoding="utf-8")  # noqa: SIM115 - lives as long as the server
         self.proc = subprocess.Popen(
             # --host 127.0.0.1: mlx_vlm.server defaults to 0.0.0.0, which would
             # expose the inference server to the local network.
@@ -345,7 +356,7 @@ def _port_arg(value: str) -> int:
     return port
 
 
-def parse_args(argv: list[str], env: dict[str, str] | None = None) -> CliConfig:
+def parse_args(argv: list[str], env: Mapping[str, str] | None = None) -> CliConfig:
     env = env or os.environ
     parser = argparse.ArgumentParser(
         prog=Path(argv[0]).name if argv else "threadstone",
@@ -355,7 +366,9 @@ def parse_args(argv: list[str], env: dict[str, str] | None = None) -> CliConfig:
     parser.add_argument("--port", type=_port_arg, help="Override the local inference server port for this run")
     parser.add_argument("--list-models", action="store_true", help="Print configured models and exit")
     parser.add_argument("--doctor", action="store_true", help="Check the local Threadstone setup and exit")
-    parser.add_argument("--all-models", action="store_true", help="With --doctor, check every configured model snapshot")
+    parser.add_argument(
+        "--all-models", action="store_true", help="With --doctor, check every configured model snapshot"
+    )
     parser.add_argument("--version", action="version", version=f"%(prog)s {VERSION}")
     ns = parser.parse_args(argv[1:] if argv else [])
 
@@ -386,7 +399,7 @@ def parse_args(argv: list[str], env: dict[str, str] | None = None) -> CliConfig:
             port_override = int(raw_port)
         except ValueError:
             print(f"{RED}FORGE_PORT={raw_port!r} is not a valid integer{RST}")
-            raise SystemExit(1)
+            raise SystemExit(1) from None
         if not (1 <= port_override <= 65535):
             print(f"{RED}FORGE_PORT={raw_port!r} must be 1-65535{RST}")
             raise SystemExit(1)
@@ -910,10 +923,8 @@ def run_chat(cli: CliConfig) -> int:
             if cmd == "/clear":
                 history = []
                 attachment = None
-                try:
+                with contextlib.suppress(OSError):
                     restore_path.unlink(missing_ok=True)
-                except OSError:
-                    pass
                 print(f"{DIM}cleared{RST}")
 
             elif cmd == "/restore":
@@ -1002,8 +1013,8 @@ def run_chat(cli: CliConfig) -> int:
                         append_assistant_message(history, result)
                         save_history(restore_path, history)
                         print()
-                    except StreamInterrupted as exc:
-                        append_assistant_message(history, exc.result)
+                    except StreamInterrupted as retry_interrupt:
+                        append_assistant_message(history, retry_interrupt.result)
                         save_history(restore_path, history)
                         print(f"{DIM}interrupted{RST}")
                     except urllib.error.HTTPError as retry_exc:
