@@ -34,6 +34,7 @@ fi
 # ── 1. macOS + Apple Silicon ──────────────────────────────────────────────────
 [[ "$(uname)" == "Darwin" ]] || die "macOS only"
 [[ "$(uname -m)" == "arm64" ]] || die "Apple Silicon (arm64) required for MLX"
+[[ "$(sw_vers -productVersion | cut -d. -f1)" -ge 14 ]] || die "macOS 14 or newer required for MLX"
 ok "platform: macOS arm64"
 
 # ── 1b. detect shell rc file ──────────────────────────────────────────────────

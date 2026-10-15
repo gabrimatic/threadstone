@@ -26,6 +26,7 @@ on:
       - ".github/FUNDING.yml"
       - ".github/dependabot.yml"
   workflow_dispatch:
+  workflow_call:
 
 permissions:
   contents: read

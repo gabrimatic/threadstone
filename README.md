@@ -2,11 +2,11 @@
 
 [![CI](https://github.com/gabrimatic/threadstone/actions/workflows/ci.yml/badge.svg)](https://github.com/gabrimatic/threadstone/actions/workflows/ci.yml)
 [![PyPI](https://img.shields.io/pypi/v/threadstone.svg)](https://pypi.org/project/threadstone/)
-[![License: MIT](https://img.shields.io/badge/license-MIT-yellow.svg)](LICENSE)
-[![Platform: macOS](https://img.shields.io/badge/platform-macOS-lightgrey.svg)]()
-[![Apple Silicon](https://img.shields.io/badge/Apple_Silicon-required-blue.svg)]()
-[![Python 3.13+](https://img.shields.io/badge/Python-3.13+-blue.svg)]()
-[![Local-first](https://img.shields.io/badge/local--first-MLX-green.svg)]()
+[![License: MIT](https://img.shields.io/badge/license-MIT-yellow.svg)](https://github.com/gabrimatic/threadstone/blob/main/LICENSE)
+![Platform: macOS](https://img.shields.io/badge/platform-macOS-lightgrey.svg)
+![Apple Silicon](https://img.shields.io/badge/Apple_Silicon-required-blue.svg)
+![Python 3.13+](https://img.shields.io/badge/Python-3.13+-blue.svg)
+![Local-first](https://img.shields.io/badge/local--first-MLX-green.svg)
 
 Threadstone is offline terminal chat for local MLX language models on Apple Silicon. It starts a local `mlx-vlm` server for the model you choose, streams the answer into your terminal, keeps the conversation usable across crashes, and shuts the server down when you leave.
 
@@ -14,7 +14,7 @@ The useful part is ownership. The network is only for setup and model downloads.
 
 ## Quick Start
 
-Requirements: **macOS**, **Apple Silicon**, **Python 3.13+**, Homebrew, and about **12 GB** for the default model set.
+Requirements: **macOS 14 or newer**, **Apple Silicon**, **Python 3.13+**, Homebrew, and about **12 GB** for the default model set.
 
 ```bash
 git clone https://github.com/gabrimatic/threadstone.git
@@ -23,6 +23,8 @@ cd threadstone
 ```
 
 `setup.sh` creates `~/mlx-env`, installs the MLX runtime, downloads the configured Qwen model snapshots, installs the `threadstone` CLI, and writes shell helpers for `oracle`, `forge`, and `quench`.
+
+`pip install threadstone` installs only the CLI. It still needs the MLX runtime in `~/mlx-env` (or the venv named by `THREADSTONE_VENV`) and the model snapshots that `setup.sh` provides; `threadstone --doctor` reports what is missing.
 
 Start a chat:
 
@@ -178,7 +180,7 @@ Release path:
 1. Bump the version in `pyproject.toml` and `VERSION` in `threadstone.py`, and add a `CHANGELOG.md` entry.
 2. Push to `main` and wait for CI to pass.
 3. Publish a GitHub release with a `vX.Y.Z` tag that matches the package version.
-4. The release workflow checks the tag against the package version, builds the sdist and wheel, and publishes to PyPI through Trusted Publishing.
+4. The release workflow reruns CI on the tagged commit, checks the tag against the package version, builds the sdist and wheel, and publishes to PyPI through Trusted Publishing.
 
 PyPI Trusted Publishing must be configured for:
 

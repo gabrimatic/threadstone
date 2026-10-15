@@ -4,6 +4,20 @@ This changelog tracks notable Threadstone changes.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [Unreleased]
+
+### Fixed
+
+- The release workflow runs the full CI suite on the tagged commit before it builds and publishes; 1.2.1 had dropped the test run from the release path.
+- The sdist ships `tests/__init__.py`, so the documented test command works from an unpacked sdist.
+- `setup.sh` stops on macOS older than 14, where current MLX has no wheels and pip would fall back to releases too old for the configured models. The README states the macOS 14 requirement.
+- The README's license link and badges work on the PyPI project page, and the README says what `pip install threadstone` does and does not install.
+
+### Changed
+
+- The build backend requirement is back to setuptools 77 or newer, the version that added the license metadata Threadstone uses; 84 was never needed.
+- Package metadata names the author.
+
 ## [1.2.1] - 2026-10-15
 
 First release published to PyPI. 1.2.0 was tagged on GitHub but never reached PyPI.

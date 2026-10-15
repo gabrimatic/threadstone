@@ -1,5 +1,5 @@
 [build-system]
-requires = ["setuptools>=84"]
+requires = ["setuptools>=77"]
 build-backend = "setuptools.build_meta"
 
 [project]
@@ -8,6 +8,7 @@ version = "1.2.1"
 description = "Offline terminal chat for local MLX language models on Apple Silicon"
 readme = "README.md"
 license = "MIT"
+authors = [{ name = "Soroush Yousefpour" }]
 requires-python = ">=3.13"
 keywords = ["llm", "mlx", "apple-silicon", "offline", "chat", "terminal", "local-first", "qwen"]
 classifiers = [
